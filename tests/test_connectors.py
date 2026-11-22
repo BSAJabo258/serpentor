@@ -397,22 +397,40 @@ def test_all_proxy_counts_as_proxied(monkeypatch):
     assert not fetch._proxied("https://archive.org/p.pdf")
 
 
-def test_own_client_ignores_proxy_env_unless_opted_in(monkeypatch):
-    seen = {}
+def test_own_client_routing_per_hop(monkeypatch, make_pdf):
+    """Direct hops use a client that ignores proxy env (so NO_PROXY can't be defeated by the
+    pinned IP); a proxy-aware client is opened only for a hop that really is proxied, and only
+    with the opt-in. A redirect that moves from a bypassed host to a proxied one is refused
+    without the opt-in."""
+    from bsi import egress
+    pdf = make_pdf("routing.pdf", ["routing hop test"]).read_bytes()
+    made = []
     real = httpx.Client
 
-    def spy(*a, **k):
-        seen["trust_env"] = k.get("trust_env")
-        raise RuntimeError("stop")
-    monkeypatch.setattr(fetch.httpx, "Client", spy)
+    def handler(req):
+        if req.headers["host"] == "archive.org":
+            return httpx.Response(302, headers={"location": "https://other.org/p.pdf"})
+        return httpx.Response(200, headers={"content-type": "application/pdf"}, stream=httpx.ByteStream(pdf))
+
+    def factory(*a, **k):
+        made.append(k.get("trust_env"))
+        k.pop("trust_env", None)
+        return real(*a, transport=httpx.MockTransport(handler), **k)
+    monkeypatch.setattr(fetch.httpx, "Client", factory)
+    for k in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "no_proxy"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+    monkeypatch.setenv("NO_PROXY", "archive.org")
+    # no opt-in: first hop is bypassed (direct), the redirect to other.org would be proxied -> refused
     monkeypatch.delenv("BSI_ALLOW_PROXIED_IMPORTS", raising=False)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(egress.EgressDenied, match="proxy"):
         fetch.fetch_to_vault("https://archive.org/p.pdf", resolve=PUBLIC)
-    assert seen["trust_env"] is False
+    assert made == [False]
+    # opt-in: direct client for archive.org, a proxy-aware client only for the proxied hop
+    made.clear()
     monkeypatch.setenv("BSI_ALLOW_PROXIED_IMPORTS", "1")
-    with pytest.raises(RuntimeError):
-        fetch.fetch_to_vault("https://archive.org/p.pdf", resolve=PUBLIC)
-    assert seen["trust_env"] is True
+    src = fetch.fetch_to_vault("https://archive.org/p.pdf", resolve=PUBLIC)
+    assert src and made == [False, True]
     monkeypatch.setattr(fetch.httpx, "Client", real)
 
 
