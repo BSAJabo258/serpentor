@@ -28,13 +28,28 @@ def _suffix(url: str, ctype: str) -> str:
     return suf if suf in KNOWN_SUFFIXES else ".bin"
 
 
-def _proxied(url: str) -> bool:
-    """True when the environment routes this URL through an HTTP(S) proxy."""
+def _proxy_for(url: str) -> str | None:
+    """The proxy URL the environment would use for this URL, or None for a direct connection.
+
+    This is the single routing decision: the clients themselves never read proxy settings
+    (trust_env=False), so httpx can't route a hop differently from what we checked. Matches
+    HTTP(S)_PROXY and ALL_PROXY; NO_PROXY is checked against both "host" and "host:port"."""
     import urllib.request
-    host = urlparse(url).hostname or ""
+    u = urlparse(url)
     env = urllib.request.getproxies()
-    # Match httpx's routing: a scheme-specific proxy or ALL_PROXY, unless NO_PROXY bypasses it.
-    return bool(env.get(urlparse(url).scheme) or env.get("all")) and not urllib.request.proxy_bypass(host)
+    proxy = env.get(u.scheme) or env.get("all")
+    if not proxy:
+        return None
+    host = u.hostname or ""
+    port = u.port or (443 if u.scheme == "https" else 80)
+    if urllib.request.proxy_bypass(host) or urllib.request.proxy_bypass(f"{host}:{port}"):
+        return None
+    return proxy
+
+
+def _proxied(url: str) -> bool:
+    """True when the environment routes this URL through a proxy."""
+    return _proxy_for(url) is not None
 
 
 def _allow_proxied() -> bool:
@@ -84,8 +99,13 @@ def fetch_to_vault(url: str, *, title=None, tier="unverified", holder=None, crea
                 raise egress.EgressDenied("imports through an HTTP(S) proxy are disabled; set "
                                           "BSI_ALLOW_PROXIED_IMPORTS=1 if your proxy blocks private addresses")
             with tempfile.TemporaryDirectory() as d:
-                if via_proxy and own and pc is None:
-                    pc = httpx.Client(timeout=120, headers={"User-Agent": USER_AGENT}, trust_env=True)
+                if via_proxy and own:
+                    # explicit proxy, env ignored: httpx can't apply its own NO_PROXY matching
+                    # and silently send this hop direct with an unpinned hostname
+                    if pc is not None:
+                        pc.close()
+                    pc = httpx.Client(timeout=120, headers={"User-Agent": USER_AGENT},
+                                      proxy=_proxy_for(url), trust_env=False)
                 r = _open(pc if (via_proxy and own) else c, url, addrs, via_proxy)
                 try:
                     if r.is_redirect:
