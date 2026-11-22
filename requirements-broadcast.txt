@@ -1,0 +1,5 @@
+# Broadcast extras (the documentary series). ffmpeg + poppler-utils must be on PATH.
+-r requirements.txt
+piper-tts>=1.3          # local narration voice (CPU). Voices: huggingface.co/rhasspy/piper-voices
+google-api-python-client>=2.130   # YouTube upload
+google-auth-oauthlib>=1.2

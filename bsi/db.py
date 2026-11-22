@@ -41,6 +41,7 @@ class Source(Base):
     # unverified: provenance unknown
     tier = Column(String, default="unverified")
     sensitive = Column(Boolean, default=False)   # never leaves local hosts
+    rights = Column(String)                       # "public domain", "CC BY-SA 4.0", "own", "unknown" — gates on-screen use
     injection_flags = Column(JSON, default=list)
     registered_at = Column(DateTime(timezone=True), default=now)
     pages = relationship("Page", back_populates="source", cascade="all, delete-orphan")
@@ -179,6 +180,25 @@ class ResearchManifest(Base):
     spec_hash = Column(String(64), nullable=False)
     spec = Column(JSON, nullable=False)
     results = Column(JSON, default=list)
+    created_at = Column(DateTime(timezone=True), default=now)
+
+
+class Episode(Base):
+    """One broadcast episode. Rendered from the evidence as it stood at render time;
+    nothing is published until a human approves it."""
+    __tablename__ = "episodes"
+    id = Column(Integer, primary_key=True)
+    claim_id = Column(Integer, ForeignKey("claims.id"))
+    kind = Column(String, nullable=False)          # case | update | open_case | archive_report
+    title = Column(String)
+    status_at_render = Column(String)              # claim status when this episode was made
+    previous_status = Column(String)               # for update episodes
+    script = Column(JSON, default=list)            # scenes: narration + visual spec + citations
+    files = Column(JSON, default=dict)             # role -> path
+    voice = Column(String)                         # piper:<model> | own | silent
+    state = Column(String, default="draft")        # draft | approved | published | rejected
+    approved_by = Column(String)
+    published = Column(JSON, default=dict)         # platform -> id/url
     created_at = Column(DateTime(timezone=True), default=now)
 
 

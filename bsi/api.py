@@ -37,7 +37,7 @@ def upload_source(file: UploadFile = File(...), title: str = Form(None),
                         author: str = Form(None), created_date: str = Form(None),
                         created_year: int = Form(None), holder: str = Form(None),
                         origin_url: str = Form(None), tier: str = Form("unverified"),
-                        sensitive: bool = Form(False)):
+                        sensitive: bool = Form(False), rights: str = Form(None)):
     if tier not in claims.TIER_WEIGHT:
         raise HTTPException(400, f"tier must be one of {list(claims.TIER_WEIGHT)}")
     with tempfile.TemporaryDirectory() as d:
@@ -46,7 +46,7 @@ def upload_source(file: UploadFile = File(...), title: str = Form(None),
             shutil.copyfileobj(file.file, f)
         src = vault.register(p, title=title, author=author, created_date=created_date,
                              created_year=created_year, holder=holder, origin_url=origin_url,
-                             tier=tier, sensitive=sensitive)
+                             tier=tier, sensitive=sensitive, rights=rights)
     return {"source_id": src.id, "sha256": src.sha256, "injection_flags": src.injection_flags}
 
 
@@ -150,7 +150,7 @@ def list_sources(limit: int = 100):
     s = db.session()
     try:
         return [{"id": x.id, "title": x.title, "tier": x.tier, "holder": x.holder,
-                 "created_date": x.created_date, "created_year": x.created_year, "pages": len(x.pages),
+                 "created_date": x.created_date, "created_year": x.created_year, "pages": len(x.pages), "rights": x.rights,
                  "sha256": x.sha256, "origin_url": x.origin_url, "sensitive": x.sensitive,
                  "injection_flags": len(x.injection_flags or [])}
                 for x in s.query(db.Source).order_by(db.Source.id.desc()).limit(limit)]
@@ -180,6 +180,7 @@ class ImportIn(BaseModel):
     holder: str | None = None
     created_date: str | None = None
     created_year: int | None = None
+    rights: str | None = None
 
 
 @app.post("/archives/import")
@@ -188,7 +189,7 @@ def archives_import(i: ImportIn):
         raise HTTPException(400, "bad tier")
     try:
         src = fetch.fetch_to_vault(i.url, title=i.title, tier=i.tier, holder=i.holder,
-                                   created_date=i.created_date, created_year=i.created_year)
+                                   created_date=i.created_date, created_year=i.created_year, rights=i.rights)
     except egress.EgressDenied as e:
         raise HTTPException(400, str(e))
     except Exception as e:
@@ -352,3 +353,136 @@ def ask(a: AskIn):
 @app.post("/seed")
 def seed():
     return {"added": registry.load_seed()}
+
+
+# ------------------------------------------------------------ broadcast
+import threading  # noqa: E402
+import uuid  # noqa: E402
+
+from .broadcast import episode as bc_episode  # noqa: E402
+from .broadcast import studio  # noqa: E402
+
+_JOBS: dict[str, dict] = {}
+
+
+class EpisodeIn(BaseModel):
+    claim_id: int | None = None      # omit to let the planner pick today's episode
+    kind: str | None = None          # case | update | open_case
+    note: str | None = None          # producer's note, read in the episode
+    short: bool = True
+
+
+@app.get("/broadcast/plan")
+def broadcast_plan():
+    s = db.session()
+    try:
+        return bc_episode.plan_next(s) or {"status": "nothing_to_make"}
+    finally:
+        s.close()
+
+
+@app.post("/broadcast/episodes")
+def broadcast_make(e: EpisodeIn):
+    """Rendering takes minutes, so it runs in the background; poll /broadcast/jobs/{id}."""
+    job = uuid.uuid4().hex[:12]
+    _JOBS[job] = {"state": "running"}
+
+    def run():
+        try:
+            _JOBS[job] = {"state": "done", "result": studio.make_episode(e.claim_id, e.kind, captain_note=e.note,
+                                                                         make_short=e.short)}
+        except Exception as ex:   # surfaced to the UI, not swallowed
+            _JOBS[job] = {"state": "failed", "error": f"{type(ex).__name__}: {ex}"[:300]}
+    threading.Thread(target=run, daemon=True).start()
+    return {"job_id": job}
+
+
+@app.get("/broadcast/jobs/{job_id}")
+def broadcast_job(job_id: str):
+    if job_id not in _JOBS:
+        raise HTTPException(404)
+    return _JOBS[job_id]
+
+
+def _ep_out(ep):
+    return {"id": ep.id, "claim_id": ep.claim_id, "kind": ep.kind, "title": ep.title, "state": ep.state,
+            "status_at_render": ep.status_at_render, "previous_status": ep.previous_status, "voice": ep.voice,
+            "approved_by": ep.approved_by, "published": ep.published or {},
+            "files": sorted((ep.files or {}).keys()), "created_at": str(ep.created_at)}
+
+
+@app.get("/broadcast/episodes")
+def broadcast_list(limit: int = 50):
+    s = db.session()
+    try:
+        return [_ep_out(e) for e in s.query(db.Episode).order_by(db.Episode.id.desc()).limit(limit)]
+    finally:
+        s.close()
+
+
+@app.get("/broadcast/episodes/{ep_id:int}")
+def broadcast_get(ep_id: int):
+    s = db.session()
+    try:
+        ep = s.get(db.Episode, ep_id)
+        if not ep:
+            raise HTTPException(404)
+        out = _ep_out(ep)
+        out["script"] = ep.script
+        return out
+    finally:
+        s.close()
+
+
+@app.get("/broadcast/episodes/{ep_id:int}/files/{role}")
+def broadcast_file(ep_id: int, role: str):
+    s = db.session()
+    try:
+        ep = s.get(db.Episode, ep_id)
+        path = (ep.files or {}).get(role) if ep else None   # only files the episode recorded — no path input
+    finally:
+        s.close()
+    if not path or not Path(path).exists():
+        raise HTTPException(404)
+    return FileResponse(path)
+
+
+class ReviewEpIn(BaseModel):
+    reviewer: str
+    note: str = ""
+
+
+@app.post("/broadcast/episodes/{ep_id:int}/approve")
+def broadcast_approve(ep_id: int, r: ReviewEpIn):
+    try:
+        studio.approve(ep_id, r.reviewer, r.note)
+    except ValueError as ex:
+        raise HTTPException(400, str(ex))
+    return broadcast_get(ep_id)
+
+
+@app.post("/broadcast/episodes/{ep_id:int}/reject")
+def broadcast_reject(ep_id: int, r: ReviewEpIn):
+    try:
+        studio.reject(ep_id, r.reviewer, r.note)
+    except ValueError as ex:
+        raise HTTPException(400, str(ex))
+    return broadcast_get(ep_id)
+
+
+class PublishIn(BaseModel):
+    platform: str = "youtube"       # youtube | package
+    privacy: str = "private"
+    publish_at: str | None = None   # RFC 3339, schedules the release
+    short: bool = False
+
+
+@app.post("/broadcast/episodes/{ep_id:int}/publish")
+def broadcast_publish(ep_id: int, p: PublishIn):
+    kw = {} if p.platform == "package" else {"privacy": p.privacy, "publish_at": p.publish_at, "short": p.short}
+    try:
+        return studio.publish(ep_id, p.platform, **kw)
+    except PermissionError as ex:
+        raise HTTPException(403, str(ex))
+    except (RuntimeError, KeyError) as ex:
+        raise HTTPException(400, str(ex))

@@ -79,7 +79,7 @@ def _open(c: httpx.Client, url: str, addrs: list[str], proxied: bool) -> httpx.R
 
 
 def fetch_to_vault(url: str, *, title=None, tier="unverified", holder=None, created_date=None,
-                   created_year=None, client: httpx.Client | None = None, resolve=None,
+                   created_year=None, rights=None, client: httpx.Client | None = None, resolve=None,
                    proxied: bool | None = None):
     own = client is None
     # Our own direct client ignores proxy environment variables entirely, so a pinned-IP request
@@ -128,7 +128,7 @@ def fetch_to_vault(url: str, *, title=None, tier="unverified", holder=None, crea
                     r.close()
                 return vault.register(p, title=title or Path(urlparse(url).path).name or url, tier=tier,
                                       holder=holder, created_date=created_date, created_year=created_year,
-                                      origin_url=url)
+                                      origin_url=url, rights=rights)
         raise ValueError("too many redirects")
     finally:
         if own:
