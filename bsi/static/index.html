@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BSI — Sovereign Intelligence</title>
+<style>
+:root{--bg:#0d0f12;--panel:#151920;--line:#262c36;--text:#e8e6e1;--dim:#8f96a3;--gold:#d4a84b;
+--documented:#3fb67b;--supported_secondary:#7fb3e0;--contested:#e0a43f;--unsupported:#9a8f7f;--contradicted:#e05a4f;--unexamined:#5b6270}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+header{position:sticky;top:0;z-index:5;background:rgba(13,15,18,.96);border-bottom:1px solid var(--line);padding:10px 16px}
+.brand{font-weight:700;letter-spacing:.06em;color:var(--gold)}.brand small{color:var(--dim);font-weight:400;letter-spacing:0;margin-left:8px}
+nav{display:flex;gap:4px;flex-wrap:wrap;margin-top:8px}nav a{color:var(--dim);text-decoration:none;padding:5px 10px;border-radius:6px;font-size:14px}
+nav a.on,nav a:hover{background:var(--panel);color:var(--text)}
+main{max-width:1100px;margin:0 auto;padding:16px}
+.stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}.stat{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 12px;min-width:96px}
+.stat b{display:block;font-size:20px}.stat span{color:var(--dim);font-size:12px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:10px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input,select,textarea,button{font:inherit;color:var(--text);background:#0f1217;border:1px solid var(--line);border-radius:6px;padding:7px 9px}
+textarea{width:100%;min-height:60px}input[type=text],input:not([type]){min-width:0;flex:1}
+button{background:var(--gold);color:#16120a;border:0;font-weight:600;cursor:pointer}button.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+button:disabled{opacity:.5}
+.chip{display:inline-block;font-size:12px;padding:2px 8px;border-radius:99px;border:1px solid currentColor;margin:2px 4px 2px 0;white-space:nowrap}
+.dim{color:var(--dim)}.small{font-size:13px}h2{margin:4px 0 12px}h3{margin:0 0 6px;font-size:16px}a{color:var(--gold)}
+.tl{border-left:2px solid var(--line);margin-left:6px;padding-left:14px}.tl .pt{position:relative;margin-bottom:12px}
+.tl .pt:before{content:"";position:absolute;left:-20px;top:6px;width:10px;height:10px;border-radius:50%;background:var(--dim)}
+.tl .pt.life:before{background:var(--gold)}
+table{width:100%;border-collapse:collapse;font-size:14px}td,th{text-align:left;padding:6px;border-bottom:1px solid var(--line);vertical-align:top}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}@media(max-width:720px){.grid2{grid-template-columns:1fr}}
+pre{white-space:pre-wrap;word-break:break-word;background:#0f1217;padding:10px;border-radius:6px;font-size:13px}
+.principle{border-left:3px solid var(--gold);padding:6px 12px;color:var(--dim);font-size:13px;margin-bottom:14px}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--gold);padding:8px 14px;border-radius:8px;display:none;z-index:10}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">BSI <small>BAUBSA Sovereign Intelligence · Serpentor</small></div>
+  <nav id="nav">
+    <a href="#board">Great Minds</a><a href="#archives">Archives</a><a href="#vault">Evidence Vault</a>
+    <a href="#discover">Discover</a><a href="#audit">Audit</a>
+  </nav>
+</header>
+<main id="app"></main>
+<div id="toast"></div>
+<script>
+const $ = s => document.querySelector(s);
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const safeUrl = u => /^https?:\/\//i.test(u || "") ? esc(u) : "#";
+const chip = st => `<span class="chip" style="color:var(--${esc(st)})">${esc(String(st).replace("_"," "))}</span>`;
+const toast = m => { const t=$("#toast"); t.textContent=m; t.style.display="block"; setTimeout(()=>t.style.display="none",3500); };
+async function api(path, opts={}) {
+  if (opts.json) { opts.body = JSON.stringify(opts.json); opts.headers = {"Content-Type":"application/json"}; opts.method = opts.method||"POST"; }
+  const r = await fetch(path, opts); const d = await r.json().catch(()=>({}));
+  if (!r.ok) throw new Error(d.detail || r.statusText); return d;
+}
+const yr = y => y==null||y==="" ? "?" : (+y<0 ? `${-y} BCE` : String(y));
+const TIERS = ["primary","secondary","tertiary","unverified"];
+const tierSel = (id, v="unverified") => `<select id="${id}">${TIERS.map(t=>`<option ${t===v?"selected":""}>${t}</option>`).join("")}</select>`;
+
+// ---------------------------------------------------------------- views
+const views = {
+  async board(_, q="") {
+    const [st, ps] = await Promise.all([api("/stats"), api(`/persons?limit=200&q=${encodeURIComponent(q)}`)]);
+    const s = st.claims_by_status;
+    $("#app").innerHTML = `
+      <div class="principle">No institution gets automatic credibility. No alternative account gets automatic credibility. No AI gets the final word. The original evidence decides.</div>
+      <div class="stats">${[["persons",st.persons],["claims",st.claims],["sources",st.sources],["evidence",st.evidence_links],["open questions",st.open_questions]]
+        .map(([k,v])=>`<div class="stat"><b>${v}</b><span>${k}</span></div>`).join("")}
+        <div class="stat"><b style="color:var(--${st.audit.ok?"documented":"contradicted"})">${st.audit.ok?"intact":"BROKEN"}</b><span>audit chain</span></div></div>
+      <div class="card small">${Object.entries(s).map(([k,v])=>`${chip(k)} ${v}`).join(" ") || "No claims yet."}</div>
+      <div class="row" style="margin-bottom:10px"><input id="q" placeholder="Search people…" value="${esc(q)}">
+        <button onclick="views.board(null,$('#q').value)">Search</button>
+        <button class="ghost" onclick="api('/seed',{method:'POST'}).then(r=>{toast('added '+r.added);views.board()})">Load starter list</button>
+        <button class="ghost" onclick="newPerson()">+ Person</button></div>
+      <div class="dim small">${ps.total} people${ps.total>ps.items.length?` · showing ${ps.items.length}`:""}</div>
+      ${ps.items.map(p=>`<div class="card"><div class="row" style="justify-content:space-between">
+          <h3><a href="#person/${p.id}">${esc(p.name)}</a> <span class="dim small">${esc(yr(p.born))}–${esc(p.died==null?"":yr(p.died))}</span></h3>
+          <span class="dim small">${esc((p.fields||[]).slice(0,3).join(" · "))}</span></div>
+          ${p.claims.map(c=>`<div class="small">${chip(c.status)} <span class="dim">[${esc(c.type)}]</span> ${esc(c.statement)}</div>`).join("") || '<div class="dim small">No claims yet — open to add one.</div>'}
+          ${(p.tags||[]).includes("possible_duplicate")?'<div class="small" style="color:var(--contested)">possible duplicate — check before merging</div>':""}
+        </div>`).join("")}`;
+  },
+
+  async person(id) {
+    const [p, srcs] = await Promise.all([api(`/persons/${id}`), api("/sources?limit=300")]);
+    const srcOpts = srcs.map(s=>`<option value="${s.id}">#${s.id} ${esc(s.title)} (${esc(s.tier)}${s.created_year?", "+s.created_year:""})</option>`).join("");
+    $("#app").innerHTML = `
+      <a href="#board" class="small">← Great Minds</a>
+      <h2>${esc(p.name)} <span class="dim">${esc(yr(p.born))}–${esc(p.died==null?"":yr(p.died))}</span></h2>
+      <div class="dim small">${esc(p.notes||"")} ${p.external_ids.wikidata?`· <a target="_blank" rel="noopener" href="https://www.wikidata.org/wiki/${esc(p.external_ids.wikidata)}">${esc(p.external_ids.wikidata)}</a>`:""}</div>
+      <div class="row" style="margin:10px 0"><button class="ghost" onclick="location.hash='archives/'+encodeURIComponent(${JSON.stringify(p.name)})">Search archives for this person</button></div>
+      <div class="grid2">
+        <div class="card"><h3>Identity, in their terms</h3>
+          ${p.identity_terms.map(t=>`<div class="small"><b>${esc(t.term)}</b> <span class="dim">— ${esc(t.kind.replace("_"," "))}${t.period?", "+esc(t.period):""}${t.source_id?`, source #${t.source_id} p.${esc(t.page??"")}`:""}</span></div>`).join("") || '<div class="dim small">None recorded.</div>'}
+          <div class="row" style="margin-top:8px"><input id="it_term" placeholder="term, verbatim">
+            <select id="it_kind"><option>self_identified</option><option>community_term</option><option>historical_label</option><option>government_category</option></select>
+            <select id="it_src"><option value="">source…</option>${srcOpts}</select><input id="it_page" placeholder="page" style="max-width:70px">
+            <button onclick="addIdentity(${p.id})">Add</button></div>
+          <div class="dim small">Historical labels and government categories must cite their document. Terms are never converted into one another.</div></div>
+        <div class="card"><h3>Depiction timeline</h3>
+          ${p.depictions.length ? `<div class="tl">${p.depictions.map(d=>`<div class="pt ${d.made_in_lifetime?"life":""}">
+            <b>${esc(d.created_date||d.year||"undated")}</b> ${d.made_in_lifetime?'<span class="chip" style="color:var(--gold)">in lifetime</span>':d.years_after_death!=null?`<span class="dim small">${d.years_after_death} yrs after death</span>`:""}
+            <div>${esc(d.descriptor)}</div><div class="dim small">${esc(d.source)} · ${esc(d.tier)}${d.holder?" · "+esc(d.holder):""}</div></div>`).join("")}</div>`
+            : '<div class="dim small">No portrayals linked yet. Link portraits/descriptions as evidence on a depiction claim with a descriptor.</div>'}</div>
+      </div>
+      <h3 style="margin-top:14px">Claims</h3>
+      ${p.claims.map(c=>`<div class="card">
+        <div>${chip(c.status)} <span class="dim">[${esc(c.type)}]</span> <b>${esc(c.statement)}</b> ${c.needs_review?'<span class="chip" style="color:var(--contested)">needs review</span>':""}</div>
+        ${c.alternatives?.length?`<div class="small dim">Alternatives: ${c.alternatives.map(esc).join(" · ")}</div>`:""}
+        <div class="small" style="margin:6px 0">${c.gaps.map(g=>`<div style="color:var(--contested)">△ ${esc(g)}</div>`).join("")}</div>
+        ${c.evidence.length?`<table><tr><th>Stance</th><th>Source</th><th>Quote</th></tr>${c.evidence.map(e=>`<tr><td>${esc(e.stance)}</td><td>${esc(e.source)} <span class="dim">(${esc(e.tier)}${e.page?", p."+esc(e.page):""})</span></td><td class="small">${esc(e.quote||"")}</td></tr>`).join("")}</table>`:""}
+        <details style="margin-top:8px"><summary class="small">Link evidence</summary>
+          <div class="row" style="margin-top:6px"><select id="ev_src_${c.id}">${srcOpts}</select>
+            <select id="ev_st_${c.id}"><option>supports</option><option>contradicts</option><option>context</option></select>
+            <input id="ev_pg_${c.id}" placeholder="page" style="max-width:70px"></div>
+          <textarea id="ev_q_${c.id}" placeholder="exact quote from that page (must match the text)"></textarea>
+          ${c.type==="depiction"?`<input id="ev_d_${c.id}" placeholder="how this source portrays them (e.g. 'dark complexion, curly hair')" style="width:100%;margin-bottom:6px">`:""}
+          <button onclick="linkEv(${c.id},${p.id})">Link</button></details>
+        <div class="row" style="margin-top:8px"><button class="ghost" onclick="compileClaim(${c.id})">Research plan</button>
+          <button class="ghost" onclick="reviewClaim(${c.id},${p.id})">Sign off</button></div>
+        <div id="plan_${c.id}"></div></div>`).join("") || '<div class="dim">No claims yet.</div>'}
+      <div class="card"><h3>New claim</h3>
+        <div class="row"><select id="nc_type"><option>contribution</option><option>ancestry</option><option>depiction</option><option>attribution</option><option>biographical</option><option>succession</option></select></div>
+        <textarea id="nc_stmt" placeholder="The claim, stated plainly"></textarea>
+        <textarea id="nc_alt" placeholder="Competing explanations, one per line"></textarea>
+        <input id="nc_neg" placeholder="What finding would count against it?" style="width:100%;margin-bottom:6px">
+        <button onclick="newClaim(${p.id})">Add claim</button></div>`;
+  },
+
+  async archives(q="") {
+    const cs = await api("/connectors");
+    $("#app").innerHTML = `<h2>Archive search</h2>
+      <div class="principle">One query fans out to every connected archive. If one refuses or is down, the others still answer, and alternates are suggested. Every run is saved as a re-runnable manifest.</div>
+      <div class="row"><input id="aq" placeholder="Name, event, patent, place…" value="${esc(q)}"><button onclick="runArchives()">Search all</button></div>
+      <div class="small" style="margin:8px 0">${cs.map(c=>`<label style="margin-right:10px;white-space:nowrap"><input type="checkbox" class="cx" value="${esc(c.name)}" ${c.ready?"checked":""} ${c.ready?"":"disabled"}> ${esc(c.label)}${c.ready?"":` <span class="dim">(set ${esc(c.key_env)})</span>`}</label>`).join("")}</div>
+      <div id="ares"></div>`;
+    if (q) runArchives();
+  },
+
+  async vault() {
+    const srcs = await api("/sources?limit=200");
+    $("#app").innerHTML = `<h2>Evidence vault</h2>
+      <div class="card"><h3>Add a document</h3>
+        <input type="file" id="vf"><div class="row" style="margin-top:6px"><input id="vt" placeholder="title"><input id="vh" placeholder="holding archive / museum">
+        <input id="vd" placeholder="date as written (e.g. c. 1790)"><input id="vy" placeholder="year" style="max-width:80px">${tierSel("vtier")}
+        <label class="small"><input type="checkbox" id="vs"> sensitive (never leaves this machine)</label><button onclick="upload()">Store</button></div>
+        <div class="dim small">Tier: primary = made at the time by participants/witnesses · secondary = scholarship · tertiary = later retellings/depictions · unverified = unknown provenance.</div></div>
+      <div class="card"><h3>Find an exact passage</h3><div class="row"><input id="pq" placeholder="exact words"><button onclick="findPassage()">Find</button></div><div id="pres"></div></div>
+      <table><tr><th>#</th><th>Title</th><th>Tier</th><th>Year</th><th>Pages</th><th>Flags</th></tr>
+      ${srcs.map(s=>`<tr><td>${s.id}</td><td>${esc(s.title)}<div class="dim small">${esc(s.holder||"")} · ${esc(s.sha256.slice(0,12))}…</div></td><td>${esc(s.tier)}</td><td>${esc(s.created_year??"")}</td><td>${s.pages}</td><td>${s.injection_flags?`<span style="color:var(--contradicted)">${s.injection_flags} injection</span>`:""}${s.sensitive?" 🔒":""}</td></tr>`).join("")}</table>`;
+  },
+
+  async discover() {
+    const o = await api("/loader/options");
+    $("#app").innerHTML = `<h2>Discover people</h2>
+      <div class="principle">Bulk-loads research targets from Wikidata. Wikidata's labels are editors' labels — they are kept as discovery tags, never recorded as anyone's identity and never counted as evidence.</div>
+      <div class="card"><div class="row"><select id="lg">${o.groups.map(g=>`<option>${esc(g)}</option>`).join("")}</select>
+        <select id="lo"><option value="">any occupation</option>${o.occupations.map(g=>`<option>${esc(g)}</option>`).join("")}</select>
+        <input id="ll" value="500" style="max-width:90px"><input id="lf" value="0" style="max-width:90px" title="offset">
+        <button id="lb" onclick="runLoader()">Load</button></div><div id="lres" class="small" style="margin-top:8px"></div></div>`;
+  },
+
+  async audit() {
+    const st = await api("/stats");
+    $("#app").innerHTML = `<h2>Audit</h2><div class="card"><h3 style="color:var(--${st.audit.ok?"documented":"contradicted"})">${st.audit.ok?"Chain intact":"Chain BROKEN at event "+st.audit.broken_at_event}</h3>
+      <div class="small">Events checked: ${st.audit.checked}<br>Head hash: <code>${esc(st.audit.head||"")}</code></div>
+      <div class="dim small" style="margin-top:6px">Every registration, link, review, search and load is chained by SHA-256. Changing or deleting any past event breaks the chain from that point.</div></div>
+      <div class="card"><h3>Research manifests</h3><div class="small">${st.manifests} saved runs</div></div>`;
+  },
+};
+
+// ---------------------------------------------------------------- actions
+async function newPerson(){ const name=prompt("Name"); if(!name) return; const b=prompt("Birth year (optional)"), d=prompt("Death year (optional)");
+  const r=await api("/persons",{json:{name,birth_year:b?+b:null,death_year:d?+d:null}}); location.hash="person/"+r.person_id; }
+async function addIdentity(pid){ try{ await api(`/persons/${pid}/identity`,{json:{term:$("#it_term").value,kind:$("#it_kind").value,
+  source_id:$("#it_src").value?+$("#it_src").value:null,page_no:$("#it_page").value?+$("#it_page").value:null}}); views.person(pid);}catch(e){toast(e.message)} }
+async function linkEv(cid,pid){ try{ const d=$("#ev_d_"+cid); await api(`/claims/${cid}/evidence`,{json:{source_id:+$("#ev_src_"+cid).value,stance:$("#ev_st_"+cid).value,
+  page_no:$("#ev_pg_"+cid).value?+$("#ev_pg_"+cid).value:null,quote:$("#ev_q_"+cid).value||null,depiction_descriptor:d?d.value||null:null}}); views.person(pid);}catch(e){toast(e.message)} }
+async function newClaim(pid){ try{ await api("/claims",{json:{person_id:pid,claim_type:$("#nc_type").value,statement:$("#nc_stmt").value,
+  alternatives:$("#nc_alt").value.split("\n").map(s=>s.trim()).filter(Boolean),negative_result:$("#nc_neg").value||null}}); views.person(pid);}catch(e){toast(e.message)} }
+async function compileClaim(cid){ const s=await api(`/claims/${cid}/compile`,{method:"POST"});
+  $("#plan_"+cid).innerHTML=`<div class="small" style="margin-top:8px"><b>Hypotheses</b><ul>${s.hypotheses.map(h=>`<li>${esc(h)}</li>`).join("")}</ul>
+  <b>Questions</b><ol>${s.questions.map(q=>`<li>${esc(q.q)} <span class="dim">— ${q.record_types.map(esc).join(", ")}</span></li>`).join("")}</ol>
+  <div class="dim">Negative result: ${esc(s.negative_result||"—")} · spec ${esc(s.spec_hash.slice(0,12))}</div></div>`; }
+async function reviewClaim(cid,pid){ const who=prompt("Reviewer name"); if(!who) return; const note=prompt("Note (why this status is right)")||"";
+  await api(`/claims/${cid}/review`,{json:{reviewer:who,note}}); views.person(pid); }
+async function runArchives(){ const q=$("#aq").value.trim(); if(!q) return; const names=[...document.querySelectorAll(".cx:checked")].map(x=>x.value).join(",");
+  $("#ares").innerHTML='<div class="dim">Searching…</div>';
+  const r=await api(`/archives/search?q=${encodeURIComponent(q)}&connectors=${names}&limit=10`);
+  $("#ares").innerHTML = (r.unreached.length?`<div class="card small" style="border-color:var(--contested)">Not reached: ${r.unreached.map(esc).join(", ")}${r.alternate_routes.length?` · also try: ${r.alternate_routes.map(esc).join(", ")}`:""}</div>`:"")+
+   r.runs.map(run=>`<div class="card"><h3>${esc(run.connector)} <span class="dim small">${esc(run.status)}${run.count!=null?" · "+run.count:""}</span></h3>
+    ${run.error?`<div class="dim small">${esc(run.error)}</div>`:""}
+    ${run.records.map((x,i)=>`<div style="border-top:1px solid var(--line);padding:6px 0"><a target="_blank" rel="noopener" href="${safeUrl(x.url)}">${esc(x.title)}</a>
+      <div class="dim small">${esc(x.date||"")} · ${esc(x.media_type||"")} · ${esc(x.holder||"")}</div>
+      ${x.snippet?`<div class="small">${esc(String(x.snippet).slice(0,280))}</div>`:""}
+      <div class="row small" style="margin-top:4px">${tierSel(`it_${run.connector}_${i}`)}
+        <button class="ghost" onclick='importRec(${esc(JSON.stringify(JSON.stringify({u:x.download_url||x.url,t:x.title,h:x.holder,d:x.date})))},"it_${esc(run.connector)}_${i}")'>Import to vault</button></div></div>`).join("")}</div>`).join("")+
+   `<div class="dim small">Manifest #${r.manifest_id} · results ${esc(r.results_hash.slice(0,12))}</div>`; }
+async function importRec(js,sel){ const x=JSON.parse(js); try{ const yr=parseInt(String(x.d||"").slice(0,4));
+  const r=await api("/archives/import",{json:{url:x.u,title:x.t,holder:x.h,created_date:x.d,created_year:isNaN(yr)?null:yr,tier:$("#"+sel).value}});
+  toast(`stored as source #${r.source_id}${r.injection_flags.length?" — injection attempt flagged":""}`);}catch(e){toast(e.message)} }
+async function upload(){ const f=$("#vf").files[0]; if(!f) return toast("choose a file"); const fd=new FormData(); fd.append("file",f);
+  for (const [k,id] of [["title","vt"],["holder","vh"],["created_date","vd"],["created_year","vy"]]) if($("#"+id).value) fd.append(k,$("#"+id).value);
+  fd.append("tier",$("#vtier").value); fd.append("sensitive",$("#vs").checked);
+  try{ const r=await api("/sources",{method:"POST",body:fd}); toast("stored #"+r.source_id); views.vault(); }catch(e){toast(e.message)} }
+async function findPassage(){ const r=await api("/passages?q="+encodeURIComponent($("#pq").value));
+  $("#pres").innerHTML=r.map(h=>`<div class="small" style="margin-top:6px"><b>${esc(h.title)}</b> · page ${h.page}<pre>${esc(h.paragraph)}</pre></div>`).join("")||'<div class="dim small">Not found.</div>'; }
+async function runLoader(){ $("#lb").disabled=true; $("#lres").textContent="Querying Wikidata…";
+  try{ const r=await api("/loader/wikidata",{json:{group:$("#lg").value,occupation:$("#lo").value||null,limit:+$("#ll").value,offset:+$("#lf").value}});
+    $("#lres").innerHTML=`Returned ${r.returned} · added <b>${r.added}</b> · already had ${r.skipped} · possible duplicates ${r.possible_duplicates}${r.next_offset!=null?` · <a href="#" onclick="$('#lf').value=${r.next_offset};runLoader();return false">load next page</a>`:""}`;
+  }catch(e){ $("#lres").textContent=e.message } $("#lb").disabled=false; }
+
+// ---------------------------------------------------------------- router
+async function route(){ const [v,arg]=(location.hash.slice(1)||"board").split("/");
+  document.querySelectorAll("nav a").forEach(a=>a.classList.toggle("on",a.getAttribute("href")==="#"+v||(v==="person"&&a.getAttribute("href")==="#board")));
+  try{ await (views[v]||views.board)(arg?decodeURIComponent(arg):undefined); }catch(e){ $("#app").innerHTML=`<div class="card">Error: ${esc(e.message)}</div>`; } }
+window.addEventListener("hashchange",route); route();
+</script>
+</body>
+</html>

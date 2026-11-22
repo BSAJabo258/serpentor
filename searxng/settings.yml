@@ -1,0 +1,29 @@
+use_default_settings: true
+server:
+  secret_key: "REPLACE-WITH-RANDOM-64-CHARS"
+  limiter: false
+  image_proxy: true
+search:
+  formats: [html, json]
+  safe_search: 0
+outgoing:
+  request_timeout: 6.0
+  # Route search egress through a SOCKS5 gateway or Tor if a case needs it:
+  # proxies:
+  #   all://:
+  #     - socks5h://gateway:1080
+engines:
+  - name: wikipedia
+    disabled: false
+  - name: wikidata
+    disabled: false
+  - name: archive is
+    disabled: false
+  - name: google scholar
+    disabled: false
+  - name: semantic scholar
+    disabled: false
+  - name: crossref
+    disabled: false
+  - name: openlibrary
+    disabled: false

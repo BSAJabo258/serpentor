@@ -1,0 +1,51 @@
+# Core stack: API + Postgres + SearXNG + Ollama.
+# Aleph runs as its own stack (see README) because it is heavy; start it only
+# after the core is proven on your hardware.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: bsi
+      POSTGRES_PASSWORD: ${BSI_DB_PASSWORD:-change-me}
+      POSTGRES_DB: bsi
+    volumes: [pgdata:/var/lib/postgresql/data]
+    networks: [internal]
+    restart: unless-stopped
+
+  searxng:
+    image: searxng/searxng:latest
+    volumes: ["./searxng:/etc/searxng:rw"]
+    ports: ["127.0.0.1:8888:8080"]       # bound to this machine only
+    networks: [internal, egress]
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes: [ollama:/root/.ollama]
+    ports: ["127.0.0.1:11434:11434"]
+    networks: [internal]                  # no internet route once models are pulled
+    restart: unless-stopped
+    # GPU: uncomment on NVIDIA hosts
+    # deploy: { resources: { reservations: { devices: [{ capabilities: [gpu] }] } } }
+
+  api:
+    build: .
+    environment:
+      BSI_DATABASE_URL: postgresql+psycopg://bsi:${BSI_DB_PASSWORD:-change-me}@postgres/bsi
+      BSI_SEARXNG_URL: http://searxng:8080
+      BSI_OLLAMA_URL: http://ollama:11434
+      BSI_OLLAMA_MODEL: ${BSI_OLLAMA_MODEL:-qwen2.5:7b-instruct}
+    env_file: [.env]                      # archive API keys (see .env.example)
+    volumes: [vault:/data]
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on: [postgres, searxng, ollama]
+    # internal: talks to postgres/ollama. egress: reaches public archives.
+    # Sensitive sources are blocked from leaving local hosts in code (bsi/egress.py).
+    networks: [internal, egress]
+    restart: unless-stopped
+
+networks:
+  internal: { internal: true }
+  egress: {}
+
+volumes: { pgdata: {}, ollama: {}, vault: {} }
