@@ -17,7 +17,7 @@ def mock(routes):
                 if isinstance(resp, int):
                     return httpx.Response(resp)
                 if isinstance(resp, bytes):
-                    return httpx.Response(200, content=resp, headers={"content-type": "application/pdf"})
+                    return httpx.Response(200, stream=httpx.ByteStream(resp), headers={"content-type": "application/pdf"})
                 if isinstance(resp, str):
                     return httpx.Response(200, text=resp)
                 return httpx.Response(200, json=resp)
@@ -244,7 +244,7 @@ def test_import_connects_to_the_validated_address(make_pdf):
 
     def handler(req):
         seen.update(host=req.url.host, header=req.headers.get("host"), sni=req.extensions.get("sni_hostname"))
-        return httpx.Response(200, content=pdf, headers={"content-type": "application/pdf"})
+        return httpx.Response(200, stream=httpx.ByteStream(pdf), headers={"content-type": "application/pdf"})
     fetch.fetch_to_vault("https://archive.org/x.pdf", resolve=rebinding,
                          client=httpx.Client(transport=httpx.MockTransport(handler)))
     assert seen == {"host": "93.184.216.34", "header": "archive.org", "sni": "archive.org"}
@@ -331,7 +331,7 @@ def test_import_tries_next_validated_address(make_pdf):
         tried.append(req.url.host)
         if req.url.host.endswith(".34"):
             raise httpx.ConnectError("down")
-        return httpx.Response(200, content=pdf, headers={"content-type": "application/pdf"})
+        return httpx.Response(200, stream=httpx.ByteStream(pdf), headers={"content-type": "application/pdf"})
     fetch.fetch_to_vault("https://archive.org/m.pdf", resolve=two,
                          client=httpx.Client(transport=httpx.MockTransport(handler)))
     assert tried == ["93.184.216.34", "93.184.216.35"]
@@ -344,7 +344,31 @@ def test_import_behind_proxy_keeps_hostname(make_pdf):
 
     def handler(req):
         seen["host"] = req.url.host
-        return httpx.Response(200, content=pdf, headers={"content-type": "application/pdf"})
+        return httpx.Response(200, stream=httpx.ByteStream(pdf), headers={"content-type": "application/pdf"})
     fetch.fetch_to_vault("https://archive.org/p.pdf", resolve=PUBLIC, proxied=True,
                          client=httpx.Client(transport=httpx.MockTransport(handler)))
     assert seen["host"] == "archive.org"
+
+
+def test_review_round_four_fixes(make_pdf):
+    from fastapi.testclient import TestClient
+    from bsi import llm
+    from bsi.api import app
+    # numeric continuations stay with their sentence
+    assert llm.validate("He died ca. 1840 [P1].", {"P1"})["grounded"] == "He died ca. 1840 [P1]."
+    assert llm.validate("See No. 3 in the register [P1].", {"P1"})["grounded"] == "See No. 3 in the register [P1]."
+    # negative paging is rejected at the boundary
+    with TestClient(app) as c:
+        assert c.get("/persons?limit=-1").status_code == 422
+        assert c.get("/persons?offset=-5").status_code == 422
+    # compressed transfers are refused, and we asked for identity
+    seen = {}
+
+    def handler(req):
+        seen["ae"] = req.headers.get("accept-encoding")
+        return httpx.Response(200, stream=httpx.ByteStream(b"\x1f\x8b" + b"\0" * 20),
+                              headers={"content-type": "application/pdf", "content-encoding": "gzip"})
+    with pytest.raises(ValueError, match="compressed"):
+        fetch.fetch_to_vault("https://archive.org/bomb.pdf", resolve=PUBLIC,
+                             client=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert seen["ae"] == "identity"
