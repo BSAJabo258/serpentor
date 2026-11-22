@@ -56,7 +56,7 @@ def vault_path(sha: str, suffix: str) -> Path:
 
 def register(path: str | Path, *, title=None, author=None, created_date=None,
              created_year=None, origin_url=None, holder=None, tier="unverified",
-             sensitive=False) -> db.Source:
+             sensitive=False, rights=None) -> db.Source:
     """Copy a file into the vault (read-only), extract text per page, scan for
     embedded instructions, and record everything in the audit chain.
     The file the user handed in is only ever read, never modified."""
@@ -89,7 +89,7 @@ def register(path: str | Path, *, title=None, author=None, created_date=None,
                         size_bytes=dest.stat().st_size, title=title or path.stem,
                         author=author, created_date=created_date, created_year=created_year,
                         origin_url=origin_url, holder=holder, tier=tier,
-                        sensitive=sensitive, injection_flags=flags)
+                        sensitive=sensitive, rights=rights, injection_flags=flags)
         src.pages = [db.Page(page_no=i, text=t) for i, t in enumerate(pages, 1)]
         s.add(src)
         s.flush()

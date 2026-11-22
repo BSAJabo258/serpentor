@@ -25,7 +25,7 @@ def _suffix(url: str, ctype: str) -> str:
 
 
 def fetch_to_vault(url: str, *, title=None, tier="unverified", holder=None, created_date=None,
-                   created_year=None, client: httpx.Client | None = None, resolve=None):
+                   created_year=None, rights=None, client: httpx.Client | None = None, resolve=None):
     c = client or httpx.Client(timeout=120, headers={"User-Agent": USER_AGENT})
     for _ in range(MAX_REDIRECTS + 1):
         egress.check_public(url, resolve=resolve)       # re-checked on every hop
@@ -46,5 +46,5 @@ def fetch_to_vault(url: str, *, title=None, tier="unverified", holder=None, crea
                         f.write(chunk)
             return vault.register(p, title=title or Path(urlparse(url).path).name or url, tier=tier,
                                   holder=holder, created_date=created_date, created_year=created_year,
-                                  origin_url=url)
+                                  origin_url=url, rights=rights)
     raise ValueError("too many redirects")

@@ -1,9 +1,9 @@
 FROM python:3.12-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ocrmypdf tesseract-ocr tesseract-ocr-fra tesseract-ocr-spa tesseract-ocr-por \
+RUN apt-get update && apt-get install -y --no-install-recommends ocrmypdf ffmpeg poppler-utils fonts-crimson fonts-inter fonts-dejavu-core tesseract-ocr tesseract-ocr-fra tesseract-ocr-spa tesseract-ocr-por \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements-broadcast.txt ./
+RUN pip install --no-cache-dir -r requirements-broadcast.txt
 COPY bsi ./bsi
 COPY tests ./tests
 RUN useradd -m bsi && mkdir -p /data && chown bsi /data

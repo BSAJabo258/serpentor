@@ -38,7 +38,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#0f1217;padding:10px;b
   <div class="brand">BSI <small>BAUBSA Sovereign Intelligence · Serpentor</small></div>
   <nav id="nav">
     <a href="#board">Great Minds</a><a href="#archives">Archives</a><a href="#vault">Evidence Vault</a>
-    <a href="#discover">Discover</a><a href="#audit">Audit</a>
+    <a href="#discover">Discover</a><a href="#broadcast">Broadcast</a><a href="#audit">Audit</a>
   </nav>
 </header>
 <main id="app"></main>
@@ -144,6 +144,7 @@ const views = {
       <div class="card"><h3>Add a document</h3>
         <input type="file" id="vf"><div class="row" style="margin-top:6px"><input id="vt" placeholder="title"><input id="vh" placeholder="holding archive / museum">
         <input id="vd" placeholder="date as written (e.g. c. 1790)"><input id="vy" placeholder="year" style="max-width:80px">${tierSel("vtier")}
+        <input id="vr" placeholder="rights (e.g. public domain)" style="max-width:200px">
         <label class="small"><input type="checkbox" id="vs"> sensitive (never leaves this machine)</label><button onclick="upload()">Store</button></div>
         <div class="dim small">Tier: primary = made at the time by participants/witnesses · secondary = scholarship · tertiary = later retellings/depictions · unverified = unknown provenance.</div></div>
       <div class="card"><h3>Find an exact passage</h3><div class="row"><input id="pq" placeholder="exact words"><button onclick="findPassage()">Find</button></div><div id="pres"></div></div>
@@ -159,6 +160,31 @@ const views = {
         <select id="lo"><option value="">any occupation</option>${o.occupations.map(g=>`<option>${esc(g)}</option>`).join("")}</select>
         <input id="ll" value="500" style="max-width:90px"><input id="lf" value="0" style="max-width:90px" title="offset">
         <button id="lb" onclick="runLoader()">Load</button></div><div id="lres" class="small" style="margin-top:8px"></div></div>`;
+  },
+
+  async broadcast() {
+    const [plan, eps] = await Promise.all([api("/broadcast/plan"), api("/broadcast/episodes")]);
+    const planTxt = plan.status === "nothing_to_make" ? "Nothing new to air — add evidence or claims."
+      : `Next: <b>${esc(plan.kind.replace("_"," "))}</b> on claim #${plan.claim_id}${plan.previous_status?` (was ${esc(plan.previous_status)})`:""}`;
+    const f = (id, role) => `/broadcast/episodes/${id}/files/${role}`;
+    $("#app").innerHTML = `<h2>Broadcast — the ongoing documentary</h2>
+      <div class="principle">Each episode is rendered from the case file as it stands that day. When evidence changes a claim's status, the next episode is a case update. Nothing is published until a person approves it.</div>
+      <div class="card"><div class="small">${planTxt}</div>
+        <textarea id="bnote" placeholder="Producer's note (optional) — your own words, read in the episode. Your voice is what makes the channel yours."></textarea>
+        <div class="row"><input id="bclaim" placeholder="claim # (blank = planner picks)" style="max-width:220px">
+          <label class="small"><input type="checkbox" id="bshort" checked> also cut a vertical Short</label>
+          <button id="bgo" onclick="makeEpisode()">Render episode</button></div><div id="bjob" class="small dim"></div></div>
+      ${eps.map(e=>`<div class="card"><div class="row" style="justify-content:space-between"><h3>#${e.id} ${esc(e.title)}</h3>
+          <span>${chip(e.status_at_render)} <span class="chip" style="color:var(--${e.state==="approved"||e.state==="published"?"documented":e.state==="rejected"?"contradicted":"contested"})">${esc(e.state)}</span></span></div>
+        <div class="dim small">${esc(e.kind)} · voice: ${esc(e.voice||"")} · ${esc(e.created_at.slice(0,16))}${e.approved_by?` · approved by ${esc(e.approved_by)}`:""}</div>
+        ${e.files.includes("episode")?`<div class="grid2" style="margin-top:8px"><video controls preload="metadata" src="${f(e.id,"episode")}" style="width:100%;border-radius:8px" poster="${f(e.id,"thumbnail")}"></video>
+          ${e.files.includes("short")?`<video controls preload="metadata" src="${f(e.id,"short")}" style="max-height:360px;border-radius:8px;justify-self:center"></video>`:""}</div>`:'<div class="dim small">Rendering…</div>'}
+        <div class="row" style="margin-top:8px;overflow-x:auto;flex-wrap:nowrap">${e.files.filter(r=>r.startsWith("carousel")).map(r=>`<a href="${f(e.id,r)}" target="_blank"><img src="${f(e.id,r)}" style="height:120px;border-radius:6px"></a>`).join("")}</div>
+        <div class="row small" style="margin-top:8px"><a href="${f(e.id,"description")}" target="_blank">description</a> · <a href="${f(e.id,"captions")}" target="_blank">captions</a> · <a href="${f(e.id,"post")}" target="_blank">post caption</a> · <a href="${f(e.id,"manifest")}" target="_blank">manifest</a></div>
+        <div class="row" style="margin-top:8px">
+          ${e.state==="draft"?`<button onclick="reviewEp(${e.id},'approve')">Approve</button><button class="ghost" onclick="reviewEp(${e.id},'reject')">Reject</button>`:""}
+          ${e.state==="approved"||e.state==="published"?`<button onclick="publishEp(${e.id},'youtube',false)">Upload to YouTube (private)</button><button class="ghost" onclick="publishEp(${e.id},'youtube',true)">Upload Short</button><button class="ghost" onclick="publishEp(${e.id},'package',false)">Social package</button>`:""}
+          ${Object.entries(e.published).map(([k,v])=>v.url?`<a href="${safeUrl(v.url)}" target="_blank">${esc(k)}${v.short?" short":""}</a>`:"").join(" ")}</div></div>`).join("")}`;
   },
 
   async audit() {
@@ -195,13 +221,13 @@ async function runArchives(){ const q=$("#aq").value.trim(); if(!q) return; cons
       <div class="dim small">${esc(x.date||"")} · ${esc(x.media_type||"")} · ${esc(x.holder||"")}</div>
       ${x.snippet?`<div class="small">${esc(String(x.snippet).slice(0,280))}</div>`:""}
       <div class="row small" style="margin-top:4px">${tierSel(`it_${run.connector}_${i}`)}
-        <button class="ghost" onclick='importRec(${esc(JSON.stringify(JSON.stringify({u:x.download_url||x.url,t:x.title,h:x.holder,d:x.date})))},"it_${esc(run.connector)}_${i}")'>Import to vault</button></div></div>`).join("")}</div>`).join("")+
+        <button class="ghost" onclick='importRec(${esc(JSON.stringify(JSON.stringify({u:x.download_url||x.url,t:x.title,h:x.holder,d:x.date,r:x.rights})))},"it_${esc(run.connector)}_${i}")'>Import to vault</button></div></div>`).join("")}</div>`).join("")+
    `<div class="dim small">Manifest #${r.manifest_id} · results ${esc(r.results_hash.slice(0,12))}</div>`; }
 async function importRec(js,sel){ const x=JSON.parse(js); try{ const yr=parseInt(String(x.d||"").slice(0,4));
-  const r=await api("/archives/import",{json:{url:x.u,title:x.t,holder:x.h,created_date:x.d,created_year:isNaN(yr)?null:yr,tier:$("#"+sel).value}});
+  const r=await api("/archives/import",{json:{url:x.u,title:x.t,holder:x.h,created_date:x.d,created_year:isNaN(yr)?null:yr,rights:x.r||null,tier:$("#"+sel).value}});
   toast(`stored as source #${r.source_id}${r.injection_flags.length?" — injection attempt flagged":""}`);}catch(e){toast(e.message)} }
 async function upload(){ const f=$("#vf").files[0]; if(!f) return toast("choose a file"); const fd=new FormData(); fd.append("file",f);
-  for (const [k,id] of [["title","vt"],["holder","vh"],["created_date","vd"],["created_year","vy"]]) if($("#"+id).value) fd.append(k,$("#"+id).value);
+  for (const [k,id] of [["title","vt"],["holder","vh"],["created_date","vd"],["created_year","vy"],["rights","vr"]]) if($("#"+id).value) fd.append(k,$("#"+id).value);
   fd.append("tier",$("#vtier").value); fd.append("sensitive",$("#vs").checked);
   try{ const r=await api("/sources",{method:"POST",body:fd}); toast("stored #"+r.source_id); views.vault(); }catch(e){toast(e.message)} }
 async function findPassage(){ const r=await api("/passages?q="+encodeURIComponent($("#pq").value));
@@ -210,6 +236,18 @@ async function runLoader(){ $("#lb").disabled=true; $("#lres").textContent="Quer
   try{ const r=await api("/loader/wikidata",{json:{group:$("#lg").value,occupation:$("#lo").value||null,limit:+$("#ll").value,offset:+$("#lf").value}});
     $("#lres").innerHTML=`Returned ${r.returned} · added <b>${r.added}</b> · already had ${r.skipped} · possible duplicates ${r.possible_duplicates}${r.next_offset!=null?` · <a href="#" onclick="$('#lf').value=${r.next_offset};runLoader();return false">load next page</a>`:""}`;
   }catch(e){ $("#lres").textContent=e.message } $("#lb").disabled=false; }
+
+async function makeEpisode(){ $("#bgo").disabled=true; const c=$("#bclaim").value.trim();
+  const r=await api("/broadcast/episodes",{json:{claim_id:c?+c:null,note:$("#bnote").value||null,short:$("#bshort").checked}});
+  const poll=async()=>{ const j=await api("/broadcast/jobs/"+r.job_id);
+    if(j.state==="running"){ $("#bjob").textContent="Rendering… narration, frames, encoding. A few minutes."; return setTimeout(poll,4000); }
+    $("#bgo").disabled=false; if(j.state==="failed") return $("#bjob").textContent=j.error;
+    toast(j.result.episode_id?`Episode #${j.result.episode_id} ready for review`:"Nothing to make"); views.broadcast(); };
+  poll(); }
+async function reviewEp(id,action){ const who=prompt(action==="approve"?"Your name (approving this episode for publication)":"Your name"); if(!who) return;
+  const note=prompt("Note (optional)")||""; try{ await api(`/broadcast/episodes/${id}/${action}`,{json:{reviewer:who,note}}); views.broadcast(); }catch(e){toast(e.message)} }
+async function publishEp(id,platform,short){ try{ const r=await api(`/broadcast/episodes/${id}/publish`,{json:{platform,short}});
+  toast(r.url?`Uploaded (${r.privacy}) — ${r.url}`:"Package ready"); views.broadcast(); }catch(e){toast(e.message)} }
 
 // ---------------------------------------------------------------- router
 async function route(){ const [v,arg]=(location.hash.slice(1)||"board").split("/");

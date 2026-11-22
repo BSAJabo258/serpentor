@@ -49,7 +49,8 @@ def link_evidence(claim_id, source_id, stance, *, page_no=None, quote=None,
             pages = s.query(db.Page).filter_by(source_id=source_id)
             if page_no:
                 pages = pages.filter_by(page_no=page_no)
-            hit = next((p for p in pages if quote in (p.text or "")), None)
+            norm = " ".join(quote.split())       # scans break lines mid-sentence; compare on words
+            hit = next((p for p in pages if norm in " ".join((p.text or "").split())), None)
             if not hit:
                 raise ValueError("quote not found in that source" + (" on that page" if page_no else "")
                                  + " — link refused")

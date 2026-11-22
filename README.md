@@ -30,6 +30,7 @@ Then open **http://localhost:8080** — the command center:
 | **Archives** | One query → every connected archive at once. Import any result straight into the vault. |
 | **Evidence Vault** | Upload documents with tier/date/holder · exact-passage search · injection flags |
 | **Discover** | Bulk-load thousands of research targets from Wikidata by group and occupation |
+| **Broadcast** | Render, watch, approve and upload the day's documentary episode |
 | **Audit** | Hash-chain integrity and saved research manifests |
 
 ## Archive connectors (v0.2)
@@ -55,6 +56,60 @@ answer normally from a home connection — run BSI on your own machine.
 
 Pre-1976 patents (Latimer, Woods, McCoy, Morgan): use the patent number at
 `patents.google.com/patent/US<number>` and import the PDF into the vault.
+
+## Broadcast — the ongoing documentary
+
+The evidence becomes a daily, faceless documentary series: a 16:9 YouTube episode, a 9:16
+Short/Reel/TikTok with burned captions, a carousel post, thumbnail, captions and description.
+All of it is rendered **from the case file as it stands that day**.
+
+**How the series stays alive:** each claim's status is computed from evidence. When new
+evidence moves a claim (say `contested` → `documented`), the planner's next pick is a **case
+update** explaining what changed and why. Then come cases with evidence that haven't aired,
+then open cases ("here's what we're looking for"). Viewers follow the investigation as it develops.
+
+**Living-data visuals on every episode:** a "LIVE CASE FILE" bar with the status as of the
+render date, the evidence scale (support vs. counter-evidence by source type), depiction
+timelines (lifetime portrayals vs. later ones), real document pages with a slow push-in
+(only when the source's rights allow), verified quotes with page and SHA-256, and the
+records that would settle the case.
+
+**Honesty is enforced in code, not left to the narrator:** the wording is locked to the
+computed status. An open case can never be narrated as proven, counter-evidence is always
+read out, and links proposed by software are flagged as awaiting review.
+
+```bash
+pip install -r requirements-broadcast.txt          # + ffmpeg and poppler-utils on PATH
+export BSI_PIPER_VOICE=/path/en_US-ryan-high.onnx  # local voice; or record your own (below)
+export BSI_MUSIC_DIR=/path/to/your/instrumentals   # your beats, auto-ducked under narration
+python -m bsi.cli broadcast plan                   # what airs next and why
+python -m bsi.cli broadcast daily --note "your words, read in the episode"
+python -m bsi.cli broadcast approve 1 --by Captain # nothing publishes without a person's yes
+python -m bsi.cli broadcast publish 1              # YouTube, private by default
+```
+Or use the **Broadcast** tab in the dashboard: render, watch, approve, upload.
+
+**Your own voice:** record `own/scene_01.wav`, `scene_02.wav`, … into the episode folder
+(read the script from the episode's `description`/captions) and re-render. Scenes you
+record use your voice, and the rest fall back to Piper.
+
+### Platform rules this is built around (checked Nov 2026)
+- **YouTube monetization:** YouTube's "inauthentic content" policy refuses to monetize generic,
+  repetitive or template-based videos, and AI personas discussing sensitive topics. So the
+  engine has no avatar or persona, and every episode's structure comes from its own evidence.
+  The producer's note and your own narration add the human authorship YouTube looks for.
+  Daily volume only helps if each episode carries new evidence.
+- **AI disclosure:** uploads set `status.containsSyntheticMedia=true` whenever the voice is
+  synthetic, and the description says so.
+- **API uploads:** videos uploaded through an *unverified* Google Cloud project are forced private
+  until the project passes Google's API audit. The default here is private anyway, so you go
+  public in Studio after a final look.
+- **TikTok:** posts from an unaudited API client are private-only, so TikTok/Reels get a ready
+  package (`short.mp4`, carousel, caption) instead of auto-posting. Instagram's API now has an
+  `is_ai_generated` flag to set if you automate it later.
+- **Rights:** document pages and images appear on screen only when the source's `rights`
+  field says public domain, CC or your own. Otherwise the episode shows the verified quote
+  as a text card.
 
 ## Modules
 
