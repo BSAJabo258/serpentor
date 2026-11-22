@@ -297,3 +297,54 @@ def test_review_round_two_fixes():
         run_all("x", names=["nope"], save=False)
     # missing originals verify as failed, not crash
     assert vault.verify_source(999999)["ok"] is False
+
+
+def test_review_round_three_fixes(make_pdf):
+    from bsi import claims, db as _db, llm, vault
+    # a quoted sentence doesn't borrow the next sentence's citation
+    v = llm.validate('"An uncited statement." A cited statement [P1].', {"P1"})
+    assert "uncited" not in v["grounded"] and "cited statement [P1]" in v["grounded"]
+    # sentence-final "etc." ends a sentence; "Mr." still doesn't
+    v = llm.validate("The catalogue lists letters, etc. He was crowned [P1].", {"P1"})
+    assert v["grounded"] == "He was crowned [P1]."
+    assert llm.validate("Mr. Smith arrived [P1].", {"P1"})["grounded"] == "Mr. Smith arrived [P1]."
+    # composed and decomposed accents normalize the same
+    assert claims._norm("José") == claims._norm("José") == "josé"
+    # case-sensitive exact search still finds the right page past case-insensitive LIKE hits
+    for i in range(25):
+        vault.register(make_pdf(f"caps{i}.pdf", [f"ZEBRAQUOTE upper {i}"]), tier="unverified")
+    vault.register(make_pdf("mixed.pdf", ["the Zebraquote mixed"]), tier="unverified")
+    hits = vault.find_passage("Zebraquote")
+    assert len(hits) == 1 and "mixed" in hits[0]["paragraph"]
+    # lock row init is idempotent
+    _db.init()
+
+
+def test_import_tries_next_validated_address(make_pdf):
+    pdf = make_pdf("multi.pdf", ["second address works"]).read_bytes()
+    tried = []
+
+    def two(host, port):
+        return [(None, None, None, "", ("93.184.216.34", port)), (None, None, None, "", ("93.184.216.35", port))]
+
+    def handler(req):
+        tried.append(req.url.host)
+        if req.url.host.endswith(".34"):
+            raise httpx.ConnectError("down")
+        return httpx.Response(200, content=pdf, headers={"content-type": "application/pdf"})
+    fetch.fetch_to_vault("https://archive.org/m.pdf", resolve=two,
+                         client=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert tried == ["93.184.216.34", "93.184.216.35"]
+
+
+def test_import_behind_proxy_keeps_hostname(make_pdf):
+    """Behind a proxy, TLS is verified against the connect host, so the hostname is kept."""
+    pdf = make_pdf("prox.pdf", ["via proxy"]).read_bytes()
+    seen = {}
+
+    def handler(req):
+        seen["host"] = req.url.host
+        return httpx.Response(200, content=pdf, headers={"content-type": "application/pdf"})
+    fetch.fetch_to_vault("https://archive.org/p.pdf", resolve=PUBLIC, proxied=True,
+                         client=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert seen["host"] == "archive.org"

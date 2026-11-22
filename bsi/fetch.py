@@ -24,28 +24,65 @@ def _suffix(url: str, ctype: str) -> str:
     return suf if suf in KNOWN_SUFFIXES else ".bin"
 
 
+def _proxied(url: str) -> bool:
+    """True when the environment routes this URL through an HTTP(S) proxy."""
+    import urllib.request
+    host = urlparse(url).hostname or ""
+    return bool(urllib.request.getproxies().get(urlparse(url).scheme)) and not urllib.request.proxy_bypass(host)
+
+
+def _open(c: httpx.Client, url: str, addrs: list[str], proxied: bool) -> httpx.Response:
+    """Open a streaming response to a validated address.
+
+    Direct: connect to each validated IP in turn (pinned; Host + SNI keep the hostname so
+    TLS verifies the real certificate), moving on only when the connection can't be made.
+    Behind a proxy: the proxy does the DNS lookup and httpcore verifies TLS against the
+    connect host, so pinning to an IP would break certificate checks; we send the hostname
+    and rely on the pre-check (documented residual risk for proxied setups)."""
+    if proxied:
+        return c.send(c.build_request("GET", url), stream=True, follow_redirects=False)
+    last = None
+    for ip in addrs:
+        target, headers, ext = egress.pinned(url, ip)
+        try:
+            return c.send(c.build_request("GET", target, headers=headers, extensions=ext),
+                          stream=True, follow_redirects=False)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            last = e
+    raise last
+
+
 def fetch_to_vault(url: str, *, title=None, tier="unverified", holder=None, created_date=None,
-                   created_year=None, rights=None, client: httpx.Client | None = None, resolve=None):
+                   created_year=None, rights=None, client: httpx.Client | None = None, resolve=None,
+                   proxied: bool | None = None):
+    own = client is None
     c = client or httpx.Client(timeout=120, headers={"User-Agent": USER_AGENT})
-    for _ in range(MAX_REDIRECTS + 1):
-        addrs = egress.check_public(url, resolve=resolve)     # re-checked on every hop
-        target, headers, ext = egress.pinned(url, addrs[0])   # connect to the address we validated
-        with tempfile.TemporaryDirectory() as d:
-            with c.stream("GET", target, headers=headers, extensions=ext, follow_redirects=False) as r:
-                if r.is_redirect:
-                    url = urljoin(url, r.headers["location"])
-                    continue
-                r.raise_for_status()
-                ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()
-                p = Path(d) / f"download{_suffix(url, ctype)}"
-                size = 0
-                with open(p, "wb") as f:
-                    for chunk in r.iter_bytes():
-                        size += len(chunk)
-                        if size > MAX_BYTES:
-                            raise ValueError("file larger than 250 MB — download manually and ingest")
-                        f.write(chunk)
-            return vault.register(p, title=title or Path(urlparse(url).path).name or url, tier=tier,
-                                  holder=holder, created_date=created_date, created_year=created_year,
-                                  origin_url=url, rights=rights)
-    raise ValueError("too many redirects")
+    try:
+        for _ in range(MAX_REDIRECTS + 1):
+            addrs = egress.check_public(url, resolve=resolve)          # re-checked on every hop
+            via_proxy = _proxied(url) if proxied is None and own else bool(proxied)
+            with tempfile.TemporaryDirectory() as d:
+                r = _open(c, url, addrs, via_proxy)
+                try:
+                    if r.is_redirect:
+                        url = urljoin(url, r.headers["location"])
+                        continue
+                    r.raise_for_status()
+                    ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()
+                    p = Path(d) / f"download{_suffix(url, ctype)}"
+                    size = 0
+                    with open(p, "wb") as f:
+                        for chunk in r.iter_bytes():
+                            size += len(chunk)
+                            if size > MAX_BYTES:
+                                raise ValueError("file larger than 250 MB — download manually and ingest")
+                            f.write(chunk)
+                finally:
+                    r.close()
+                return vault.register(p, title=title or Path(urlparse(url).path).name or url, tier=tier,
+                                      holder=holder, created_date=created_date, created_year=created_year,
+                                      origin_url=url, rights=rights)
+        raise ValueError("too many redirects")
+    finally:
+        if own:
+            c.close()

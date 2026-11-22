@@ -94,10 +94,13 @@ def list_persons(field: str | None = None, q: str | None = None, has_claims: boo
             qry = qry.filter(db.Person.display_name.ilike(f"%{q}%"))
         if has_claims:
             qry = qry.filter(db.Person.claims.any())
-        people = [p for p in qry if not field or field in (p.fields or [])]
-        total = len(people)
+        if field:   # JSON field: filter in Python, then paginate
+            people = [p for p in qry if field in (p.fields or [])]
+            total, page = len(people), people[offset:offset + limit]
+        else:       # paginate in the database
+            total, page = qry.count(), qry.offset(offset).limit(limit).all()
         out = []
-        for p in people[offset:offset + limit]:
+        for p in page:
             out.append({"id": p.id, "name": p.display_name, "born": p.birth_year, "died": p.death_year,
                         "fields": p.fields, "tags": p.tags or [], "external_ids": p.external_ids or {},
                         "claims": [claims.compute_status(c) | {"statement": c.statement, "type": c.claim_type}

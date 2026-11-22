@@ -116,6 +116,8 @@ def add_identity_term(person_id: int, term: str, kind: str, *, source_id=None,
 # ---------------------------------------------------------------- entity resolution
 def _norm(name: str) -> str:
     """Case-fold and drop punctuation, keeping letters in every script (é, ş, ñ, Arabic, Ge'ez…)."""
+    import unicodedata
+    name = unicodedata.normalize("NFC", name)          # "José" and "Jose\u0301" compare equal
     return " ".join(re.sub(r"[^\w\s]|_|\d", "", name.casefold()).split())
 
 
