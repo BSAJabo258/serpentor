@@ -497,3 +497,35 @@ def test_no_proxy_with_port_matches_httpx(monkeypatch):
     assert fetch._proxied("https://archive.org/x")               # other port -> proxied
     monkeypatch.setenv("NO_PROXY", "archive.org")
     assert not fetch._proxied("https://archive.org:8443/x")
+
+
+def test_port_qualified_no_proxy_redirect_routing(monkeypatch, make_pdf):
+    """NO_PROXY=archive.org:8443: the :8443 hop goes direct to a pinned, validated IP; the
+    redirect to archive.org (port 443) goes through the explicitly configured proxy client."""
+    pdf = make_pdf("port.pdf", ["port routing"]).read_bytes()
+    seen = []
+    real = httpx.Client
+
+    def factory(*a, **k):
+        assert k.get("trust_env") is False
+        proxy = k.pop("proxy", None)
+        k.pop("trust_env", None)
+
+        def handler(req):
+            seen.append((proxy, req.url.host, req.url.port, req.headers["host"]))
+            if req.url.port == 8443:
+                return httpx.Response(302, headers={"location": "https://archive.org/p.pdf"})
+            return httpx.Response(200, headers={"content-type": "application/pdf"},
+                                  stream=httpx.ByteStream(pdf))
+        return real(*a, transport=httpx.MockTransport(handler), **k)
+    monkeypatch.setattr(fetch.httpx, "Client", factory)
+    for k in ("HTTP_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy", "no_proxy"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+    monkeypatch.setenv("NO_PROXY", "archive.org:8443")
+    monkeypatch.setenv("BSI_ALLOW_PROXIED_IMPORTS", "1")
+    assert fetch.fetch_to_vault("https://archive.org:8443/p.pdf", resolve=PUBLIC)
+    (p1, host1, port1, hdr1), (p2, host2, port2, hdr2) = seen
+    assert p1 is None and host1 != "archive.org" and port1 == 8443 and hdr1 == "archive.org:8443"  # pinned IP
+    assert p2 == "http://proxy.example:3128" and host2 == "archive.org"                            # via proxy
+    monkeypatch.setattr(fetch.httpx, "Client", real)
