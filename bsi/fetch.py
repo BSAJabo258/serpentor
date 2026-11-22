@@ -67,10 +67,12 @@ def fetch_to_vault(url: str, *, title=None, tier="unverified", holder=None, crea
                    created_year=None, client: httpx.Client | None = None, resolve=None,
                    proxied: bool | None = None):
     own = client is None
-    # Unless proxied imports are opted in, our own client ignores proxy environment variables
-    # entirely, so a request can never be routed through a proxy by accident.
-    c = client or httpx.Client(timeout=120, headers={"User-Agent": USER_AGENT},
-                               trust_env=_allow_proxied())
+    # Our own direct client ignores proxy environment variables entirely, so a pinned-IP request
+    # is never routed through a proxy (httpx matches NO_PROXY against the request URL, which is
+    # the IP, not the hostname). A separate proxy-aware client is opened only for a hop that
+    # really goes through the proxy, and only when proxied imports are opted in.
+    c = client or httpx.Client(timeout=120, headers={"User-Agent": USER_AGENT}, trust_env=False)
+    pc = None
     try:
         for _ in range(MAX_REDIRECTS + 1):
             addrs = egress.check_public(url, resolve=resolve)          # re-checked on every hop
@@ -82,7 +84,9 @@ def fetch_to_vault(url: str, *, title=None, tier="unverified", holder=None, crea
                 raise egress.EgressDenied("imports through an HTTP(S) proxy are disabled; set "
                                           "BSI_ALLOW_PROXIED_IMPORTS=1 if your proxy blocks private addresses")
             with tempfile.TemporaryDirectory() as d:
-                r = _open(c, url, addrs, via_proxy)
+                if via_proxy and own and pc is None:
+                    pc = httpx.Client(timeout=120, headers={"User-Agent": USER_AGENT}, trust_env=True)
+                r = _open(pc if (via_proxy and own) else c, url, addrs, via_proxy)
                 try:
                     if r.is_redirect:
                         url = urljoin(url, r.headers["location"])
@@ -109,3 +113,5 @@ def fetch_to_vault(url: str, *, title=None, tier="unverified", holder=None, crea
     finally:
         if own:
             c.close()
+            if pc is not None:
+                pc.close()
