@@ -28,9 +28,10 @@ def fetch_to_vault(url: str, *, title=None, tier="unverified", holder=None, crea
                    created_year=None, client: httpx.Client | None = None, resolve=None):
     c = client or httpx.Client(timeout=120, headers={"User-Agent": USER_AGENT})
     for _ in range(MAX_REDIRECTS + 1):
-        egress.check_public(url, resolve=resolve)       # re-checked on every hop
+        addrs = egress.check_public(url, resolve=resolve)     # re-checked on every hop
+        target, headers, ext = egress.pinned(url, addrs[0])   # connect to the address we validated
         with tempfile.TemporaryDirectory() as d:
-            with c.stream("GET", url, follow_redirects=False) as r:
+            with c.stream("GET", target, headers=headers, extensions=ext, follow_redirects=False) as r:
                 if r.is_redirect:
                     url = urljoin(url, r.headers["location"])
                     continue

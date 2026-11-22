@@ -82,6 +82,7 @@ def _store(people, group, occupation, offset, limit, data):
     s = db.session()
     added = skipped = flagged = 0
     try:
+        db.serialize_writes(s)          # QID check + insert as one serialized write, across processes
         known = {}
         for pr in s.query(db.Person):
             q = (pr.external_ids or {}).get("wikidata")
@@ -96,6 +97,7 @@ def _store(people, group, occupation, offset, limit, data):
             if p["qid"] in known:
                 pr = known[p["qid"]]
                 pr.tags = sorted(set(pr.tags or []) | {tag})
+                pr.fields = sorted(set(pr.fields or []) | p["fields"])[:12]   # occupations from later pages
                 skipped += 1
                 continue
             # same name already present without a QID? keep both, flag for human merge decision
@@ -107,6 +109,8 @@ def _store(people, group, occupation, offset, limit, data):
                            notes=p["desc"])
             s.add(pr)
             known[p["qid"]] = pr                # same QID later in this batch is a duplicate
+            cands.append({"id": None, "name": p["name"], "born": p["born"], "died": p["died"],
+                          "norms": [claims._norm(p["name"])]})   # same-name people within this batch
             added += 1
             flagged += bool(dup)
         audit(s, "loader.wikidata", {"group": group, "occupation": occupation, "offset": offset,

@@ -27,6 +27,7 @@ def _canon(obj) -> str:
 
 # ---------------------------------------------------------------- audit chain
 def audit(s, action: str, payload: dict) -> db.AuditEvent:
+    db.serialize_writes(s)          # before the head read, held until this transaction ends
     last = s.query(db.AuditEvent).order_by(db.AuditEvent.id.desc()).first()
     prev = last.hash if last else GENESIS
     at = datetime.now(timezone.utc).isoformat()
@@ -106,7 +107,11 @@ def verify_source(source_id: int) -> dict:
     s = db.session()
     try:
         src = s.get(db.Source, source_id)
-        p = next(config.VAULT_DIR.glob(f"{src.sha256[:2]}/{src.sha256}*"))
+        if src is None:
+            return {"source_id": source_id, "ok": False, "error": "no such source"}
+        p = next(config.VAULT_DIR.glob(f"{src.sha256[:2]}/{src.sha256}*"), None)
+        if p is None:
+            return {"source_id": source_id, "ok": False, "error": "original missing from vault"}
         actual = sha256_file(p)
         return {"source_id": source_id, "ok": actual == src.sha256, "sha256": actual}
     finally:
@@ -118,8 +123,10 @@ def find_passage(text: str, limit: int = 20) -> list[dict]:
     s = db.session()
     try:
         out = []
-        q = s.query(db.Page).filter(db.Page.text.contains(text)).limit(limit)
+        q = s.query(db.Page).filter(db.Page.text.contains(text, autoescape=True)).limit(limit)
         for pg in q:
+            if text not in (pg.text or ""):      # literal match only, whatever the DB collation did
+                continue
             para = next((p.strip() for p in pg.text.split("\n\n") if text in p), pg.text)
             out.append({"source_id": pg.source_id, "sha256": pg.source.sha256,
                         "title": pg.source.title, "page": pg.page_no, "paragraph": para})

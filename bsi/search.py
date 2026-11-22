@@ -12,14 +12,19 @@ from .vault import audit
 def searx(query: str, *, categories="general", pages=1, client=None) -> list[dict]:
     url = f"{config.SEARXNG_URL}/search"
     egress.check(url, sensitive=False)
+    own = client is None
     c = client or httpx.Client(timeout=30)
     out = []
-    for p in range(1, pages + 1):
-        r = c.get(url, params={"q": query, "format": "json", "categories": categories, "pageno": p})
-        r.raise_for_status()
-        for item in r.json().get("results", []):
-            out.append({"url": item.get("url"), "title": item.get("title"),
-                        "snippet": item.get("content"), "engine": item.get("engine")})
+    try:
+        for p in range(1, pages + 1):
+            r = c.get(url, params={"q": query, "format": "json", "categories": categories, "pageno": p})
+            r.raise_for_status()
+            for item in r.json().get("results", []):
+                out.append({"url": item.get("url"), "title": item.get("title"),
+                            "snippet": item.get("content"), "engine": item.get("engine")})
+    finally:
+        if own:
+            c.close()
     return out
 
 

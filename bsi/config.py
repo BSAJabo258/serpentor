@@ -2,6 +2,21 @@
 import os
 from pathlib import Path
 
+
+def _load_dotenv(path=Path(".env")):
+    """KEY=VALUE lines from ./.env; real environment variables always win."""
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            if v.strip():
+                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
+
 DATA_DIR = Path(os.environ.get("BSI_DATA_DIR", "./data")).resolve()
 VAULT_DIR = DATA_DIR / "vault"          # write-once originals, named by SHA-256
 DATABASE_URL = os.environ.get("BSI_DATABASE_URL", f"sqlite:///{DATA_DIR / 'bsi.db'}")

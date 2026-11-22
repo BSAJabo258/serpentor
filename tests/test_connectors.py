@@ -1,5 +1,6 @@
 """Connectors, loader, fetch and API — all with mocked HTTP so tests never hit the network."""
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -12,7 +13,7 @@ from bsi.connectors import REGISTRY, get, run_all
 def mock(routes):
     def handler(req):
         for frag, resp in routes.items():
-            if frag in str(req.url):
+            if frag in str(req.url) or frag in req.headers.get("host", ""):
                 if isinstance(resp, int):
                     return httpx.Response(resp)
                 if isinstance(resp, bytes):
@@ -43,7 +44,8 @@ def test_parsers():
     assert g.title == "Mes mémoires" and g.date == "1852" and "ark:" in g.url
 
 
-def test_one_failure_never_stops_the_run_and_alternates_are_offered():
+def test_one_failure_never_stops_the_run_and_alternates_are_offered(monkeypatch):
+    monkeypatch.delenv("NARA_API_KEY", raising=False)
     c = mock({"archive.org": IA, "loc.gov": 503, "gallica": 403})
     r = run_all("dumas", names=["loc", "gallica", "internet_archive", "nara"], client=c)
     st = {x["connector"]: x["status"] for x in r["runs"]}
@@ -131,7 +133,7 @@ def test_import_rechecks_every_redirect():
     from bsi import egress
 
     def handler(req):
-        if req.url.host == "archive.org":
+        if req.headers.get("host") == "archive.org":
             return httpx.Response(302, headers={"location": "http://localhost:8080/stats"})
         return httpx.Response(200, text="internal")
     with pytest.raises(egress.EgressDenied):
@@ -214,7 +216,10 @@ def test_seed_resumes_partial_target():
 
 def test_audit_chain_cannot_fork():
     from sqlalchemy.exc import IntegrityError
+    from bsi import vault
     s = db.session()
+    vault.audit(s, "test.setup", {"for": "fork test"})
+    s.commit()
     head = s.query(db.AuditEvent).order_by(db.AuditEvent.id.desc()).first()
     s.add(db.AuditEvent(at="x", action="fork", payload={}, prev_hash=head.prev_hash, hash="f" * 64))
     with pytest.raises(IntegrityError):
@@ -226,3 +231,69 @@ def test_ui_never_builds_handlers_from_names():
     from pathlib import Path
     html = (Path(__file__).parents[1] / "bsi/static/index.html").read_text()
     assert "JSON.stringify(p.name)" not in html
+
+
+def test_import_connects_to_the_validated_address(make_pdf):
+    """DNS rebinding: a second lookup can't redirect the connection — we connect to the checked IP."""
+    pdf = make_pdf("pin.pdf", ["pinned download"]).read_bytes()
+    seen = {}
+    answers = iter(["93.184.216.34", "127.0.0.1"])        # rebinding attempt on the 2nd lookup
+
+    def rebinding(host, port):
+        return [(None, None, None, "", (next(answers), port))]
+
+    def handler(req):
+        seen.update(host=req.url.host, header=req.headers.get("host"), sni=req.extensions.get("sni_hostname"))
+        return httpx.Response(200, content=pdf, headers={"content-type": "application/pdf"})
+    fetch.fetch_to_vault("https://archive.org/x.pdf", resolve=rebinding,
+                         client=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert seen == {"host": "93.184.216.34", "header": "archive.org", "sni": "archive.org"}
+
+
+def test_audit_chain_serializes_across_processes(tmp_path):
+    """Two separate processes appending at once must still produce one unbroken chain."""
+    import subprocess
+    import sys
+    dbfile = tmp_path / "race.db"
+    code = ("import sys; sys.path.insert(0, %r)\n"
+            "from bsi import db, vault\n"
+            "db.init('sqlite:///%s')\n"
+            "for i in range(25):\n"
+            "    s = db.session(); vault.audit(s, 'race', {'i': i}); s.commit(); s.close()\n"
+            % (str(Path(__file__).parents[1]), dbfile))
+    subprocess.run([sys.executable, "-c", "from bsi import db; db.init('sqlite:///%s')" % dbfile],
+                   check=True, cwd=str(Path(__file__).parents[1]))
+    procs = [subprocess.Popen([sys.executable, "-c", code], cwd=str(Path(__file__).parents[1])) for _ in range(3)]
+    assert all(p.wait(timeout=120) == 0 for p in procs)
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    with Session(create_engine(f"sqlite:///{dbfile}")) as s:
+        from bsi import vault
+        res = vault.verify_audit(s)
+    assert res["ok"] and res["checked"] == 75
+
+
+def test_review_round_two_fixes():
+    from bsi import claims, llm, vault
+    # citations never jump a paragraph break
+    v = llm.validate("Unsupported claim.\n\n[P1] Supported claim.", {"P1"})
+    assert "Unsupported" not in v["grounded"]
+    # abbreviations don't cut a sentence in half and flip its meaning
+    v = llm.validate("The witness denied that Mr. Smith killed Jones [P1].", {"P1"})
+    assert v["grounded"].startswith("The witness denied that Mr. Smith")
+    # names keep their letters
+    assert claims._norm("José Martí") == "josé martí"
+    # 'same' needs an agreeing date, not merely a missing one
+    registry_name = "Datelesss Person Q"
+    from bsi import registry
+    registry.add_person(registry_name)
+    top = claims.match_person(registry_name, birth_year=1850)[0]
+    assert top["verdict"] == "possible"
+    # LIKE wildcards are literal in exact-phrase search
+    assert all("100%" in h["paragraph"] for h in vault.find_passage("100%"))
+    # unknown connectors are rejected up front
+    import pytest as _pt
+    with _pt.raises(ValueError):
+        run_all("x", names=["nope"], save=False)
+    # missing originals verify as failed, not crash
+    assert vault.verify_source(999999)["ok"] is False
