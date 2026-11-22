@@ -123,10 +123,12 @@ def find_passage(text: str, limit: int = 20) -> list[dict]:
     s = db.session()
     try:
         out = []
-        q = s.query(db.Page).filter(db.Page.text.contains(text, autoescape=True)).limit(limit)
-        for pg in q:
-            if text not in (pg.text or ""):      # literal match only, whatever the DB collation did
+        q = s.query(db.Page).filter(db.Page.text.contains(text, autoescape=True)).order_by(db.Page.id)
+        for pg in q.yield_per(200):
+            if text not in (pg.text or ""):      # case-sensitive literal match (SQLite LIKE ignores case)
                 continue
+            if len(out) >= limit:
+                break
             para = next((p.strip() for p in pg.text.split("\n\n") if text in p), pg.text)
             out.append({"source_id": pg.source_id, "sha256": pg.source.sha256,
                         "title": pg.source.title, "page": pg.page_no, "paragraph": para})

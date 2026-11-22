@@ -203,8 +203,8 @@ def init(url: str | None = None):
     with _engine.begin() as conn:   # also enforce on audit tables created before these constraints
         conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_audit_prev ON audit (prev_hash)"))
         conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_audit_hash ON audit (hash)"))
-        if not conn.execute(text("SELECT 1 FROM audit_lock WHERE id = 1")).first():
-            conn.execute(text("INSERT INTO audit_lock (id, n) VALUES (1, 0)"))
+        # atomic + safe when several processes initialize a new database at once
+        conn.execute(text("INSERT INTO audit_lock (id, n) VALUES (1, 0) ON CONFLICT (id) DO NOTHING"))
     _Session = sessionmaker(bind=_engine, expire_on_commit=False, future=True)
     return _engine
 
