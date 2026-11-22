@@ -8,7 +8,7 @@ NUMERIC = re.compile(r"\b(?:No|Vol|ca|c|pp?|vs|Nos|fol|ff)\.$")      # "ca. 1840
 BOUNDARY = re.compile(r"(?<=[.!?])\s+|(?<=[.!?][\"'”’)\]])\s+")   # also after a closing quote/bracket
 
 
-PARAGRAPH = re.compile(r"\n[ \t]*\n")                              # blank line = hard boundary
+PARAGRAPH = re.compile(r"\r?\n[ \t]*\r?\n|\r[ \t]*\r")                              # blank line = hard boundary
 
 
 def sentences(text: str) -> list[str]:
