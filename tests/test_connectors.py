@@ -418,6 +418,8 @@ def test_own_client_ignores_proxy_env_unless_opted_in(monkeypatch):
 def test_sentences_paragraph_breaks_and_lowercase_names():
     from bsi.text import sentences
     assert sentences("She lived in the U.S.\n\nShe ruled [P1].") == ["She lived in the U.S.", "She ruled [P1]."]
+    assert sentences("She lived in the U.S.\r\n\r\nShe ruled [P1].") == ["She lived in the U.S.", "She ruled [P1]."]
+    assert sentences("She lived in the U.S.\r\rShe ruled [P1].") == ["She lived in the U.S.", "She ruled [P1]."]
     assert sentences("The witness denied that Dr. van der Meer killed Jones [P1].") == \
         ["The witness denied that Dr. van der Meer killed Jones [P1]."]
     assert sentences("Mr. Smith came. He left.") == ["Mr. Smith came.", "He left."]
