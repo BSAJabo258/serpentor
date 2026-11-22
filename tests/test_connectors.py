@@ -337,8 +337,9 @@ def test_import_tries_next_validated_address(make_pdf):
     assert tried == ["93.184.216.34", "93.184.216.35"]
 
 
-def test_import_behind_proxy_keeps_hostname(make_pdf):
-    """Behind a proxy, TLS is verified against the connect host, so the hostname is kept."""
+def test_import_behind_proxy_keeps_hostname(make_pdf, monkeypatch):
+    """Behind a proxy (when the operator opts in), the hostname is kept so TLS verifies it."""
+    monkeypatch.setenv("BSI_ALLOW_PROXIED_IMPORTS", "1")
     pdf = make_pdf("prox.pdf", ["via proxy"]).read_bytes()
     seen = {}
 
@@ -372,3 +373,14 @@ def test_review_round_four_fixes(make_pdf):
         fetch.fetch_to_vault("https://archive.org/bomb.pdf", resolve=PUBLIC,
                              client=httpx.Client(transport=httpx.MockTransport(handler)))
     assert seen["ae"] == "identity"
+
+
+def test_proxied_imports_refused_by_default(monkeypatch):
+    from bsi import egress
+    monkeypatch.delenv("BSI_ALLOW_PROXIED_IMPORTS", raising=False)
+
+    def handler(req):
+        raise AssertionError("no request should be sent")
+    with pytest.raises(egress.EgressDenied, match="proxy"):
+        fetch.fetch_to_vault("https://archive.org/p.pdf", resolve=PUBLIC, proxied=True,
+                             client=httpx.Client(transport=httpx.MockTransport(handler)))
