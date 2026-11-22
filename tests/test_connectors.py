@@ -413,11 +413,12 @@ def test_own_client_routing_per_hop(monkeypatch, make_pdf):
         return httpx.Response(200, headers={"content-type": "application/pdf"}, stream=httpx.ByteStream(pdf))
 
     def factory(*a, **k):
-        made.append(k.get("trust_env"))
+        assert k.get("trust_env") is False          # no client ever reads proxy env itself
+        made.append(k.pop("proxy", None))
         k.pop("trust_env", None)
         return real(*a, transport=httpx.MockTransport(handler), **k)
     monkeypatch.setattr(fetch.httpx, "Client", factory)
-    for k in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "no_proxy"):
+    for k in ("HTTP_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy", "no_proxy"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
     monkeypatch.setenv("NO_PROXY", "archive.org")
@@ -425,12 +426,12 @@ def test_own_client_routing_per_hop(monkeypatch, make_pdf):
     monkeypatch.delenv("BSI_ALLOW_PROXIED_IMPORTS", raising=False)
     with pytest.raises(egress.EgressDenied, match="proxy"):
         fetch.fetch_to_vault("https://archive.org/p.pdf", resolve=PUBLIC)
-    assert made == [False]
+    assert made == [None]
     # opt-in: direct client for archive.org, a proxy-aware client only for the proxied hop
     made.clear()
     monkeypatch.setenv("BSI_ALLOW_PROXIED_IMPORTS", "1")
     src = fetch.fetch_to_vault("https://archive.org/p.pdf", resolve=PUBLIC)
-    assert src and made == [False, True]
+    assert src and made == [None, "http://proxy.example:3128"]
     monkeypatch.setattr(fetch.httpx, "Client", real)
 
 
@@ -484,3 +485,15 @@ def test_audit_chain_serializes_on_postgres():
     uniq = {tuple(ix["column_names"]) for ix in inspect(eng).get_indexes("audit") if ix["unique"]}
     assert ("prev_hash",) in uniq and ("hash",) in uniq
     eng.dispose()
+
+
+
+def test_no_proxy_with_port_matches_httpx(monkeypatch):
+    for k in ("HTTP_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy", "no_proxy"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+    monkeypatch.setenv("NO_PROXY", "archive.org:8443")
+    assert not fetch._proxied("https://archive.org:8443/x")      # bypassed -> direct + pinned
+    assert fetch._proxied("https://archive.org/x")               # other port -> proxied
+    monkeypatch.setenv("NO_PROXY", "archive.org")
+    assert not fetch._proxied("https://archive.org:8443/x")
