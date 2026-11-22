@@ -86,7 +86,7 @@ def create_person(p: PersonIn):
 
 @app.get("/persons")
 def list_persons(field: str | None = None, q: str | None = None, has_claims: bool = False,
-                 limit: int = 100, offset: int = 0):
+                 limit: int = Query(100, ge=0, le=1000), offset: int = Query(0, ge=0)):
     s = db.session()
     try:
         qry = s.query(db.Person).order_by(db.Person.display_name)

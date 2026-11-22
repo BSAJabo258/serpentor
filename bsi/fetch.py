@@ -10,6 +10,9 @@ from .connectors.base import USER_AGENT
 
 MAX_BYTES = 250 * 1024 * 1024
 MAX_REDIRECTS = 5
+# Ask for the bytes as stored. A compressed transfer (gzip, gzip, …) could inflate far past
+# MAX_BYTES before any size check, so encoded bodies are refused and raw bytes are capped.
+NO_ENCODING = {"Accept-Encoding": "identity"}
 EXT = {"application/pdf": ".pdf", "text/plain": ".txt", "text/html": ".html",
        "image/jpeg": ".jpg", "image/png": ".png", "image/tiff": ".tif", "application/json": ".json",
        "application/xml": ".xml", "text/xml": ".xml", "text/csv": ".csv"}
@@ -40,10 +43,11 @@ def _open(c: httpx.Client, url: str, addrs: list[str], proxied: bool) -> httpx.R
     connect host, so pinning to an IP would break certificate checks; we send the hostname
     and rely on the pre-check (documented residual risk for proxied setups)."""
     if proxied:
-        return c.send(c.build_request("GET", url), stream=True, follow_redirects=False)
+        return c.send(c.build_request("GET", url, headers=NO_ENCODING), stream=True, follow_redirects=False)
     last = None
     for ip in addrs:
         target, headers, ext = egress.pinned(url, ip)
+        headers = {**headers, **NO_ENCODING}
         try:
             return c.send(c.build_request("GET", target, headers=headers, extensions=ext),
                           stream=True, follow_redirects=False)
@@ -68,11 +72,14 @@ def fetch_to_vault(url: str, *, title=None, tier="unverified", holder=None, crea
                         url = urljoin(url, r.headers["location"])
                         continue
                     r.raise_for_status()
+                    enc = r.headers.get("content-encoding", "identity").strip().lower()
+                    if enc not in ("", "identity"):
+                        raise ValueError(f"refused compressed transfer ({enc}) — download manually and ingest")
                     ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()
                     p = Path(d) / f"download{_suffix(url, ctype)}"
                     size = 0
                     with open(p, "wb") as f:
-                        for chunk in r.iter_bytes():
+                        for chunk in r.iter_raw():         # no decoding: the cap applies to real bytes
                             size += len(chunk)
                             if size > MAX_BYTES:
                                 raise ValueError("file larger than 250 MB — download manually and ingest")
