@@ -3,6 +3,19 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: bsi
+          POSTGRES_PASSWORD: bsi
+          POSTGRES_DB: bsi
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U bsi" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # throwaway database for the PostgreSQL audit-chain concurrency test
+      BSI_TEST_PG_URL: postgresql+psycopg://bsi:bsi@localhost:5432/bsi
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

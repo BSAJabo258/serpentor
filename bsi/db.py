@@ -9,7 +9,7 @@ Design rules baked into the schema:
     the evidence linked to it (see claims.py).
 """
 from datetime import datetime, timezone
-from sqlalchemy import (create_engine, event, text, Column, Integer, String, Text, DateTime,
+from sqlalchemy import (create_engine, event, inspect, text, Column, Integer, String, Text, DateTime,
                         ForeignKey, Float, Boolean, JSON, UniqueConstraint)
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
@@ -199,12 +199,24 @@ def init(url: str | None = None):
             dbapi_conn.execute("PRAGMA foreign_keys=ON")
     else:
         _engine = create_engine(url, future=True)
-    Base.metadata.create_all(_engine)
-    with _engine.begin() as conn:   # also enforce on audit tables created before these constraints
-        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_audit_prev ON audit (prev_hash)"))
-        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_audit_hash ON audit (hash)"))
-        # atomic + safe when several processes initialize a new database at once
-        conn.execute(text("INSERT INTO audit_lock (id, n) VALUES (1, 0) ON CONFLICT (id) DO NOTHING"))
+    with _engine.begin() as conn:
+        if _engine.dialect.name == "postgresql":
+            # Several processes may start at once (API workers, CLI). Without this, concurrent
+            # CREATE TABLE / CREATE INDEX / INSERT can deadlock or collide; the transaction-scoped
+            # advisory lock makes schema setup run one process at a time.
+            conn.execute(text("SELECT pg_advisory_xact_lock(4242424242)"))
+        Base.metadata.create_all(conn)
+        # Also enforce uniqueness on audit tables created before these constraints. Only issue
+        # DDL when something is missing: CREATE INDEX (even IF NOT EXISTS) locks the audit table,
+        # which would deadlock against another process that is mid-append.
+        have = {tuple(ix["column_names"]) for ix in inspect(conn).get_indexes("audit") if ix.get("unique")}
+        have |= {tuple(uc["column_names"]) for uc in inspect(conn).get_unique_constraints("audit")}
+        if ("prev_hash",) not in have:
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_audit_prev ON audit (prev_hash)"))
+        if ("hash",) not in have:
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_audit_hash ON audit (hash)"))
+        if conn.execute(text("SELECT 1 FROM audit_lock WHERE id = 1")).first() is None:
+            conn.execute(text("INSERT INTO audit_lock (id, n) VALUES (1, 0) ON CONFLICT (id) DO NOTHING"))
     _Session = sessionmaker(bind=_engine, expire_on_commit=False, future=True)
     return _engine
 
