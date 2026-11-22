@@ -32,7 +32,13 @@ def _proxied(url: str) -> bool:
     """True when the environment routes this URL through an HTTP(S) proxy."""
     import urllib.request
     host = urlparse(url).hostname or ""
-    return bool(urllib.request.getproxies().get(urlparse(url).scheme)) and not urllib.request.proxy_bypass(host)
+    env = urllib.request.getproxies()
+    # Match httpx's routing: a scheme-specific proxy or ALL_PROXY, unless NO_PROXY bypasses it.
+    return bool(env.get(urlparse(url).scheme) or env.get("all")) and not urllib.request.proxy_bypass(host)
+
+
+def _allow_proxied() -> bool:
+    return os.environ.get("BSI_ALLOW_PROXIED_IMPORTS", "").lower() in ("1", "true", "yes")
 
 
 def _open(c: httpx.Client, url: str, addrs: list[str], proxied: bool) -> httpx.Response:
@@ -61,12 +67,15 @@ def fetch_to_vault(url: str, *, title=None, tier="unverified", holder=None, crea
                    created_year=None, client: httpx.Client | None = None, resolve=None,
                    proxied: bool | None = None):
     own = client is None
-    c = client or httpx.Client(timeout=120, headers={"User-Agent": USER_AGENT})
+    # Unless proxied imports are opted in, our own client ignores proxy environment variables
+    # entirely, so a request can never be routed through a proxy by accident.
+    c = client or httpx.Client(timeout=120, headers={"User-Agent": USER_AGENT},
+                               trust_env=_allow_proxied())
     try:
         for _ in range(MAX_REDIRECTS + 1):
             addrs = egress.check_public(url, resolve=resolve)          # re-checked on every hop
             via_proxy = _proxied(url) if proxied is None and own else bool(proxied)
-            if via_proxy and os.environ.get("BSI_ALLOW_PROXIED_IMPORTS", "").lower() not in ("1", "true", "yes"):
+            if via_proxy and not _allow_proxied():
                 # Behind a proxy, the proxy resolves the hostname, so our public-address check
                 # can't be enforced at connect time. Refuse unless the operator opts in (e.g. a
                 # proxy that itself blocks private destinations).

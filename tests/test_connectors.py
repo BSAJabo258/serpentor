@@ -384,3 +384,32 @@ def test_proxied_imports_refused_by_default(monkeypatch):
     with pytest.raises(egress.EgressDenied, match="proxy"):
         fetch.fetch_to_vault("https://archive.org/p.pdf", resolve=PUBLIC, proxied=True,
                              client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+
+def test_all_proxy_counts_as_proxied(monkeypatch):
+    for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("ALL_PROXY", "http://proxy.example:3128")
+    assert fetch._proxied("https://archive.org/p.pdf")
+    monkeypatch.delenv("ALL_PROXY")
+    monkeypatch.delenv("all_proxy", raising=False)
+    assert not fetch._proxied("https://archive.org/p.pdf")
+
+
+def test_own_client_ignores_proxy_env_unless_opted_in(monkeypatch):
+    seen = {}
+    real = httpx.Client
+
+    def spy(*a, **k):
+        seen["trust_env"] = k.get("trust_env")
+        raise RuntimeError("stop")
+    monkeypatch.setattr(fetch.httpx, "Client", spy)
+    monkeypatch.delenv("BSI_ALLOW_PROXIED_IMPORTS", raising=False)
+    with pytest.raises(RuntimeError):
+        fetch.fetch_to_vault("https://archive.org/p.pdf", resolve=PUBLIC)
+    assert seen["trust_env"] is False
+    monkeypatch.setenv("BSI_ALLOW_PROXIED_IMPORTS", "1")
+    with pytest.raises(RuntimeError):
+        fetch.fetch_to_vault("https://archive.org/p.pdf", resolve=PUBLIC)
+    assert seen["trust_env"] is True
+    monkeypatch.setattr(fetch.httpx, "Client", real)
