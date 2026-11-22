@@ -1,4 +1,5 @@
 """Bring an archive item into the evidence vault: download, hash, extract, audit."""
+import os
 import tempfile
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -65,6 +66,12 @@ def fetch_to_vault(url: str, *, title=None, tier="unverified", holder=None, crea
         for _ in range(MAX_REDIRECTS + 1):
             addrs = egress.check_public(url, resolve=resolve)          # re-checked on every hop
             via_proxy = _proxied(url) if proxied is None and own else bool(proxied)
+            if via_proxy and os.environ.get("BSI_ALLOW_PROXIED_IMPORTS", "").lower() not in ("1", "true", "yes"):
+                # Behind a proxy, the proxy resolves the hostname, so our public-address check
+                # can't be enforced at connect time. Refuse unless the operator opts in (e.g. a
+                # proxy that itself blocks private destinations).
+                raise egress.EgressDenied("imports through an HTTP(S) proxy are disabled; set "
+                                          "BSI_ALLOW_PROXIED_IMPORTS=1 if your proxy blocks private addresses")
             with tempfile.TemporaryDirectory() as d:
                 r = _open(c, url, addrs, via_proxy)
                 try:
