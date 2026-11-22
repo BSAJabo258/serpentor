@@ -45,10 +45,15 @@ def link_evidence(claim_id, source_id, stance, *, page_no=None, quote=None,
         raise ValueError("stance must be supports | contradicts | context")
     s = db.session()
     try:
-        if quote and page_no:
-            pg = s.query(db.Page).filter_by(source_id=source_id, page_no=page_no).first()
-            if not pg or quote not in (pg.text or ""):
-                raise ValueError("quote not found on that page of that source — link refused")
+        if quote:
+            pages = s.query(db.Page).filter_by(source_id=source_id)
+            if page_no:
+                pages = pages.filter_by(page_no=page_no)
+            hit = next((p for p in pages if quote in (p.text or "")), None)
+            if not hit:
+                raise ValueError("quote not found in that source" + (" on that page" if page_no else "")
+                                 + " — link refused")
+            page_no = page_no or hit.page_no
         ev = db.EvidenceLink(claim_id=claim_id, source_id=source_id, stance=stance,
                              page_no=page_no, quote=quote,
                              depiction_descriptor=depiction_descriptor, added_by=added_by)
@@ -79,16 +84,18 @@ def review(claim_id, reviewer, note):
 def load_seed(path=SEED) -> int:
     data = json.loads(Path(path).read_text())
     s = db.session()
-    existing = {p.display_name for p in s.query(db.Person)}
+    existing = {p.display_name: (p.id, {c.statement for c in p.claims}) for p in s.query(db.Person)}
     s.close()
     n = 0
     for t in data["targets"]:
-        if t["name"] in existing:
-            continue
-        p = add_person(t["name"], birth_year=t.get("birth_year"), death_year=t.get("death_year"),
-                       fields=t.get("fields"))
+        if t["name"] in existing:          # resume: add only the claims that are missing
+            pid, have = existing[t["name"]]
+        else:
+            pid, have = add_person(t["name"], birth_year=t.get("birth_year"),
+                                   death_year=t.get("death_year"), fields=t.get("fields")).id, set()
+            n += 1
         for c in t.get("claims", []):
-            add_claim(p.id, c["type"], c["statement"], alternatives=c.get("alternatives"),
-                      negative_result=c.get("negative_result"))
-        n += 1
+            if c["statement"] not in have:
+                add_claim(pid, c["type"], c["statement"], alternatives=c.get("alternatives"),
+                          negative_result=c.get("negative_result"))
     return n

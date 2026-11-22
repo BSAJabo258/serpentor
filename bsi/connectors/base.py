@@ -83,6 +83,21 @@ class Connector:
                 "ready": self.ready(), "docs": self.docs}
 
 
+def safe_error(e: Exception, c: "Connector | None" = None) -> str:
+    """Error text without URLs or keys — request URLs can carry API keys."""
+    if isinstance(e, httpx.HTTPStatusError):
+        msg = f"HTTP {e.response.status_code}"
+    elif isinstance(e, httpx.TimeoutException):
+        msg = "timed out"
+    elif isinstance(e, httpx.TransportError):
+        msg = "could not connect"
+    else:
+        msg = type(e).__name__
+    if c is not None and c.key:
+        msg = msg.replace(c.key, "[redacted]")
+    return msg
+
+
 REGISTRY: dict[str, type[Connector]] = {}
 
 # Where the same material is often also held, when a source can't be reached.
@@ -121,8 +136,7 @@ def run_all(query: str, *, names: list[str] | None = None, limit: int = 10,
             recs = [asdict(r) for r in c.search(query, limit=limit)]
             runs.append({"connector": n, "status": "ok", "count": len(recs), "records": recs})
         except Exception as e:   # one archive failing never stops the others
-            runs.append({"connector": n, "status": "error", "error": f"{type(e).__name__}: {e}"[:300],
-                         "records": []})
+            runs.append({"connector": n, "status": "error", "error": safe_error(e, c), "records": []})
     failed = [r["connector"] for r in runs if r["status"] != "ok"]
     fallbacks = sorted({a for f in failed for a in ALTERNATES.get(f, [])
                         if a not in failed and a in REGISTRY})

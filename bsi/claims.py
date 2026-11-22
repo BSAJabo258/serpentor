@@ -22,11 +22,11 @@ TIER_WEIGHT = {"primary": 3, "secondary": 2, "tertiary": 1, "unverified": 0}
 def compute_status(claim: db.Claim) -> dict:
     sup = {t: 0 for t in TIER_WEIGHT}
     con = {t: 0 for t in TIER_WEIGHT}
-    model_only = True
+    human_primary_support = False
     for ev in claim.evidence:
         tier = ev.source.tier or "unverified"
-        if ev.added_by == "human":
-            model_only = False
+        if ev.stance == "supports" and tier == "primary" and ev.added_by == "human":
+            human_primary_support = True
         if ev.stance == "supports":
             sup[tier] += 1
         elif ev.stance == "contradicts":
@@ -48,7 +48,7 @@ def compute_status(claim: db.Claim) -> dict:
     else:
         status = "unsupported"
 
-    if status == "documented" and model_only:
+    if status == "documented" and not human_primary_support:
         status = "supported_secondary"   # a model's reading alone can't establish a record
 
     return {"claim_id": claim.id, "status": status, "supports": sup, "contradicts": con,
@@ -124,22 +124,37 @@ def match_person(name: str, birth_year: int | None = None, death_year: int | Non
     reported as DISTINCT, never merged automatically."""
     s = db.session()
     try:
-        out = []
-        for p in s.query(db.Person):
-            names = [p.display_name] + [n.name for n in p.names]
-            score = max(SequenceMatcher(None, _norm(name), _norm(n)).ratio() for n in names)
-            if score < 0.6:
-                continue
-            conflict = []
-            if birth_year and p.birth_year and abs(birth_year - p.birth_year) > 2:
-                conflict.append(f"birth {birth_year} vs {p.birth_year}")
-            if death_year and p.death_year and abs(death_year - p.death_year) > 2:
-                conflict.append(f"death {death_year} vs {p.death_year}")
-            verdict = ("distinct" if conflict else
-                       "same" if score >= threshold and (birth_year or death_year) else
-                       "possible" if score >= threshold else "unlikely")
-            out.append({"person_id": p.id, "name": p.display_name, "score": round(score, 3),
-                        "verdict": verdict, "conflicts": conflict})
-        return sorted(out, key=lambda r: -r["score"])
+        return match_against(load_candidates(s), name, birth_year, death_year, threshold)
     finally:
         s.close()
+
+
+def load_candidates(s) -> list[dict]:
+    """All people with their normalized names, loaded in two queries — reuse for a whole batch."""
+    aliases = {}
+    for n in s.query(db.PersonName):
+        aliases.setdefault(n.person_id, []).append(n.name)
+    return [{"id": p.id, "name": p.display_name, "born": p.birth_year, "died": p.death_year,
+             "norms": [_norm(x) for x in [p.display_name] + aliases.get(p.id, [])]}
+            for p in s.query(db.Person)]
+
+
+def match_against(cands: list[dict], name: str, birth_year=None, death_year=None,
+                  threshold: float = 0.88) -> list[dict]:
+    target = _norm(name)
+    out = []
+    for p in cands:
+        score = max(SequenceMatcher(None, target, n).ratio() for n in p["norms"])
+        if score < 0.6:
+            continue
+        conflict = []
+        if birth_year and p["born"] and abs(birth_year - p["born"]) > 2:
+            conflict.append(f"birth {birth_year} vs {p['born']}")
+        if death_year and p["died"] and abs(death_year - p["died"]) > 2:
+            conflict.append(f"death {death_year} vs {p['died']}")
+        verdict = ("distinct" if conflict else
+                   "same" if score >= threshold and (birth_year or death_year) else
+                   "possible" if score >= threshold else "unlikely")
+        out.append({"person_id": p["id"], "name": p["name"], "score": round(score, 3),
+                    "verdict": verdict, "conflicts": conflict})
+    return sorted(out, key=lambda r: -r["score"])

@@ -66,6 +66,10 @@ def register(path: str | Path, *, title=None, author=None, created_date=None,
     try:
         existing = s.query(db.Source).filter_by(sha256=sha).first()
         if existing:
+            if sensitive and not existing.sensitive:      # upgrade only, never downgrade
+                existing.sensitive = True
+                audit(s, "source.sensitivity_upgrade", {"source_id": existing.id, "sha256": sha})
+                s.commit()
             return existing
         dest = vault_path(sha, path.suffix.lower())
         dest.parent.mkdir(parents=True, exist_ok=True)

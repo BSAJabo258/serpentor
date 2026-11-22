@@ -89,7 +89,7 @@ def test_bce_years():
 def test_fetch_to_vault(make_pdf):
     pdf = make_pdf("dl.pdf", ["Downloaded record page one"]).read_bytes()
     src = fetch.fetch_to_vault("https://archive.org/download/x/x.pdf", tier="primary",
-                               client=mock({"archive.org": pdf}))
+                               client=mock({"archive.org": pdf}), resolve=PUBLIC)
     assert src.origin_url.endswith("x.pdf") and src.tier == "primary"
 
 
@@ -107,3 +107,122 @@ def test_api_and_ui():
         assert c.get("/stats").json()["audit"]["ok"]
         assert len(c.get("/connectors").json()) == len(REGISTRY)
         assert "groups" in c.get("/loader/options").json()
+
+
+# ---------------------------------------------------------------- review fixes (PR #1)
+PUBLIC = lambda host, port: [(None, None, None, "", ("93.184.216.34", port))]   # noqa: E731
+PRIVATE = {"localhost": "127.0.0.1", "intranet": "10.0.0.5", "meta": "169.254.169.254"}
+
+
+def resolver(host, port):
+    return [(None, None, None, "", (PRIVATE.get(host, "93.184.216.34"), port))]
+
+
+def test_import_refuses_local_and_private_addresses():
+    from bsi import egress
+    for url in ["http://localhost:8080/sources", "http://intranet/admin", "http://meta/latest",
+                "file:///etc/passwd", "ftp://archive.org/x"]:
+        with pytest.raises(egress.EgressDenied):
+            egress.check_public(url, resolve=resolver)
+    egress.check_public("https://archive.org/x.pdf", resolve=resolver)
+
+
+def test_import_rechecks_every_redirect():
+    from bsi import egress
+
+    def handler(req):
+        if req.url.host == "archive.org":
+            return httpx.Response(302, headers={"location": "http://localhost:8080/stats"})
+        return httpx.Response(200, text="internal")
+    with pytest.raises(egress.EgressDenied):
+        fetch.fetch_to_vault("https://archive.org/redirect", resolve=resolver,
+                             client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+
+def test_content_type_beats_misleading_suffix(make_pdf):
+    pdf = make_pdf("ct.pdf", ["Served from a php script"]).read_bytes()
+    src = fetch.fetch_to_vault("https://archive.org/download.php?id=9", resolve=PUBLIC,
+                               client=mock({"archive.org": pdf}))
+    s = db.session()
+    assert "php script" in s.get(db.Source, src.id).pages[0].text
+    s.close()
+
+
+def test_errors_never_carry_api_keys(monkeypatch):
+    monkeypatch.setenv("DATA_GOV_API_KEY", "SECRETKEY123")
+    c = mock({"api.si.edu": 403})
+    r = run_all("dumas", names=["smithsonian"], client=c)
+    assert "SECRETKEY123" not in json.dumps(r)
+    assert r["runs"][0]["error"] == "HTTP 403"
+
+
+def test_documented_needs_human_primary_support(make_pdf):
+    from bsi import claims, registry, vault
+    p = registry.add_person("Review Case A")
+    c = registry.add_claim(p.id, "contribution", "Built Y.")
+    prim = vault.register(make_pdf("rp.pdf", ["record of Y built by A"]), tier="primary")
+    tert = vault.register(make_pdf("rt.pdf", ["a later story about Y"]), tier="tertiary")
+    registry.link_evidence(c.id, prim.id, "supports", added_by="model:x")
+    registry.link_evidence(c.id, tert.id, "context")             # a human's unrelated link
+    s = db.session()
+    assert claims.compute_status(s.get(db.Claim, c.id))["status"] == "supported_secondary"
+    s.close()
+
+
+def test_quote_checked_even_without_page(make_pdf):
+    from bsi import registry, vault
+    p = registry.add_person("Review Case B")
+    c = registry.add_claim(p.id, "biographical", "x")
+    src = vault.register(make_pdf("rq.pdf", ["first page", "the real words"]), tier="primary")
+    with pytest.raises(ValueError):
+        registry.link_evidence(c.id, src.id, "supports", quote="invented words")
+    ev = registry.link_evidence(c.id, src.id, "supports", quote="the real words")
+    assert ev.page_no == 2                                         # page filled in from the match
+
+
+def test_citation_cannot_carry_into_next_sentence():
+    from bsi import llm
+    v = llm.validate("He was born in 1802. [P3] He liked tea.", {"P3"})
+    assert "born in 1802" in v["grounded"] and "liked tea" not in v["grounded"]
+    assert v["uncited_or_invalid"] == ["He liked tea."]
+
+
+def test_sensitivity_upgrade_on_duplicate(make_pdf):
+    from bsi import vault
+    path = make_pdf("sens.pdf", ["family record"])
+    a = vault.register(path, sensitive=False)
+    b = vault.register(path, sensitive=True)
+    c2 = vault.register(path, sensitive=False)                    # never downgrades
+    s = db.session()
+    assert a.id == b.id == c2.id and s.get(db.Source, a.id).sensitive
+    s.close()
+
+
+def test_seed_resumes_partial_target():
+    from bsi import registry
+    registry.load_seed()
+    s = db.session()
+    d = s.query(db.Person).filter_by(display_name="Alexandre Dumas").one()
+    victim = d.claims[-1]
+    s.delete(victim); s.commit(); s.close()
+    registry.load_seed()
+    s = db.session()
+    d = s.query(db.Person).filter_by(display_name="Alexandre Dumas").one()
+    assert len(d.claims) == 2 and s.query(db.Person).filter_by(display_name="Alexandre Dumas").count() == 1
+    s.close()
+
+
+def test_audit_chain_cannot_fork():
+    from sqlalchemy.exc import IntegrityError
+    s = db.session()
+    head = s.query(db.AuditEvent).order_by(db.AuditEvent.id.desc()).first()
+    s.add(db.AuditEvent(at="x", action="fork", payload={}, prev_hash=head.prev_hash, hash="f" * 64))
+    with pytest.raises(IntegrityError):
+        s.commit()
+    s.rollback(); s.close()
+
+
+def test_ui_never_builds_handlers_from_names():
+    from pathlib import Path
+    html = (Path(__file__).parents[1] / "bsi/static/index.html").read_text()
+    assert "JSON.stringify(p.name)" not in html

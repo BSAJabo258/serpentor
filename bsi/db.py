@@ -63,8 +63,8 @@ class AuditEvent(Base):
     at = Column(String, nullable=False)
     action = Column(String, nullable=False)
     payload = Column(JSON, nullable=False)
-    prev_hash = Column(String(64), nullable=False)
-    hash = Column(String(64), nullable=False)
+    prev_hash = Column(String(64), nullable=False, unique=True)   # a fork can never be committed
+    hash = Column(String(64), nullable=False, unique=True)
 
 
 class Person(Base):

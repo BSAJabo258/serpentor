@@ -5,6 +5,7 @@ ethnicity is an editor's label, so it is stored only as a provenance tag on the
 target — never as an IdentityTerm, and never as a claim's evidence.
 """
 import re
+import threading
 
 from . import claims, db
 from .connectors import get
@@ -52,6 +53,9 @@ def _year(v):
     return int(m.group(1) + m.group(2)) if m else None
 
 
+_LOAD_LOCK = threading.Lock()   # QID check and insert happen as one step per process
+
+
 def load_wikidata(group: str, occupation: str | None = None, *, limit: int = 500,
                   offset: int = 0, client=None) -> dict:
     if group not in GROUPS:
@@ -70,6 +74,11 @@ def load_wikidata(group: str, occupation: str | None = None, *, limit: int = 500
         if b.get("occLabel"):
             p["fields"].add(b["occLabel"]["value"])
 
+    with _LOAD_LOCK:
+        return _store(people, group, occupation, offset, limit, data)
+
+
+def _store(people, group, occupation, offset, limit, data):
     s = db.session()
     added = skipped = flagged = 0
     try:
@@ -78,6 +87,7 @@ def load_wikidata(group: str, occupation: str | None = None, *, limit: int = 500
             q = (pr.external_ids or {}).get("wikidata")
             if q:
                 known[q] = pr
+        cands = claims.load_candidates(s)       # one load per batch, not per person
         tag = f"wikidata:{group}" + (f":{occupation}" if occupation else "")
         for p in people.values():
             if p["name"] == p["qid"]:          # no English label — skip, can't research by name yet
@@ -89,13 +99,14 @@ def load_wikidata(group: str, occupation: str | None = None, *, limit: int = 500
                 skipped += 1
                 continue
             # same name already present without a QID? keep both, flag for human merge decision
-            dup = [m for m in claims.match_person(p["name"], p["born"], p["died"])
+            dup = [m for m in claims.match_against(cands, p["name"], p["born"], p["died"])
                    if m["verdict"] in ("same", "possible")]
             pr = db.Person(display_name=p["name"], birth_year=p["born"], death_year=p["died"],
                            fields=sorted(p["fields"])[:8], external_ids={"wikidata": p["qid"]},
                            tags=[tag] + (["possible_duplicate"] if dup else []),
                            notes=p["desc"])
             s.add(pr)
+            known[p["qid"]] = pr                # same QID later in this batch is a duplicate
             added += 1
             flagged += bool(dup)
         audit(s, "loader.wikidata", {"group": group, "occupation": occupation, "offset": offset,

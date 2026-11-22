@@ -37,9 +37,14 @@ def build_context(page_ids: list[int]) -> tuple[str, dict, bool, list]:
         s.close()
 
 
+TRAILING_CITES = re.compile(r"([.!?])((?:\s*\[P\d+(?:\s*,\s*P\d+)*\])+)")
+
+
 def validate(answer: str, allowed: set[str]) -> dict:
+    # "Sentence. [P3] Next sentence." -> the [P3] belongs to the first sentence, not the next.
+    text = TRAILING_CITES.sub(lambda m: " " + m.group(2).strip() + m.group(1), answer.strip())
     kept, dropped = [], []
-    for sent in re.split(r"(?<=[.!?])\s+", answer.strip()):
+    for sent in re.split(r"(?<=[.!?])\s+", text):
         if not sent:
             continue
         ids = {i.strip() for m in CITE.findall(sent) for i in m.split(",")}

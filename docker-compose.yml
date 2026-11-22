@@ -28,6 +28,15 @@ services:
     # GPU: uncomment on NVIDIA hosts
     # deploy: { resources: { reservations: { devices: [{ capabilities: [gpu] }] } } }
 
+  # One-time model download. Ollama itself has no internet route; this job does,
+  # and writes into the same volume:  docker compose --profile setup run --rm ollama-pull
+  ollama-pull:
+    image: ollama/ollama:latest
+    profiles: [setup]
+    volumes: [ollama:/root/.ollama]
+    networks: [egress]
+    entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 5 && ollama pull ${BSI_OLLAMA_MODEL:-qwen2.5:7b-instruct}"]
+
   api:
     build: .
     environment:

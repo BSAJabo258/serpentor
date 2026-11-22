@@ -106,7 +106,7 @@ export BSI_DB_PASSWORD=$(openssl rand -hex 16)
 sed -i "s/REPLACE-WITH-RANDOM-64-CHARS/$(openssl rand -hex 32)/" searxng/settings.yml
 docker compose up -d searxng postgres
 # pull the model once while Ollama can reach the internet, then it runs offline:
-docker compose run --rm --network bridge ollama ollama pull qwen2.5:7b-instruct
+docker compose --profile setup run --rm ollama-pull
 docker compose up -d
 curl -X POST localhost:8080/seed
 ```

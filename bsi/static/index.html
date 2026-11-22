@@ -89,7 +89,7 @@ const views = {
       <a href="#board" class="small">← Great Minds</a>
       <h2>${esc(p.name)} <span class="dim">${esc(yr(p.born))}–${esc(p.died==null?"":yr(p.died))}</span></h2>
       <div class="dim small">${esc(p.notes||"")} ${p.external_ids.wikidata?`· <a target="_blank" rel="noopener" href="https://www.wikidata.org/wiki/${esc(p.external_ids.wikidata)}">${esc(p.external_ids.wikidata)}</a>`:""}</div>
-      <div class="row" style="margin:10px 0"><button class="ghost" onclick="location.hash='archives/'+encodeURIComponent(${JSON.stringify(p.name)})">Search archives for this person</button></div>
+      <div class="row" style="margin:10px 0"><a class="chip" style="color:var(--gold);padding:7px 12px" href="#archives/${esc(encodeURIComponent(p.name))}">Search archives for this person</a></div>
       <div class="grid2">
         <div class="card"><h3>Identity, in their terms</h3>
           ${p.identity_terms.map(t=>`<div class="small"><b>${esc(t.term)}</b> <span class="dim">— ${esc(t.kind.replace("_"," "))}${t.period?", "+esc(t.period):""}${t.source_id?`, source #${t.source_id} p.${esc(t.page??"")}`:""}</span></div>`).join("") || '<div class="dim small">None recorded.</div>'}

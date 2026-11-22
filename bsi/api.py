@@ -7,7 +7,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from . import claims, compiler, connectors, db, fetch, llm, loader, registry, search, vault
+from . import claims, compiler, connectors, db, egress, fetch, llm, loader, registry, search, vault
 
 from contextlib import asynccontextmanager
 
@@ -19,6 +19,21 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="BAUBSA Sovereign Intelligence", version="0.2.0", lifespan=lifespan)
+
+import asyncio  # noqa: E402
+
+_WRITE_LOCK = asyncio.Lock()
+
+
+@app.middleware("http")
+async def serialize_writes(request, call_next):
+    """One write at a time: the audit chain reads its head and appends in one step, and
+    duplicate checks (e.g. Wikidata QIDs) can't race. The unique constraints on the audit
+    table are the database-level backstop if several processes ever share one database."""
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        async with _WRITE_LOCK:
+            return await call_next(request)
+    return await call_next(request)
 STATIC = Path(__file__).parent / "static"
 
 
@@ -29,7 +44,7 @@ def ui():
 
 # ------------------------------------------------------------ evidence
 @app.post("/sources")
-async def upload_source(file: UploadFile = File(...), title: str = Form(None),
+def upload_source(file: UploadFile = File(...), title: str = Form(None),
                         author: str = Form(None), created_date: str = Form(None),
                         created_year: int = Form(None), holder: str = Form(None),
                         origin_url: str = Form(None), tier: str = Form("unverified"),
@@ -180,8 +195,10 @@ def archives_import(i: ImportIn):
     try:
         src = fetch.fetch_to_vault(i.url, title=i.title, tier=i.tier, holder=i.holder,
                                    created_date=i.created_date, created_year=i.created_year)
+    except egress.EgressDenied as e:
+        raise HTTPException(400, str(e))
     except Exception as e:
-        raise HTTPException(502, f"could not fetch: {e}")
+        raise HTTPException(502, f"could not fetch: {connectors.base.safe_error(e)}")
     return {"source_id": src.id, "sha256": src.sha256, "injection_flags": src.injection_flags}
 
 
