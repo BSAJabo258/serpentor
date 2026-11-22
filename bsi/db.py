@@ -9,7 +9,7 @@ Design rules baked into the schema:
     the evidence linked to it (see claims.py).
 """
 from datetime import datetime, timezone
-from sqlalchemy import (create_engine, Column, Integer, String, Text, DateTime,
+from sqlalchemy import (create_engine, event, text, Column, Integer, String, Text, DateTime,
                         ForeignKey, Float, Boolean, JSON, UniqueConstraint)
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
@@ -66,6 +66,13 @@ class AuditEvent(Base):
     payload = Column(JSON, nullable=False)
     prev_hash = Column(String(64), nullable=False, unique=True)   # a fork can never be committed
     hash = Column(String(64), nullable=False, unique=True)
+
+
+class AuditLock(Base):
+    """One row. Writers update it to serialize appends to the audit chain."""
+    __tablename__ = "audit_lock"
+    id = Column(Integer, primary_key=True)
+    n = Column(Integer, nullable=False, default=0)
 
 
 class Person(Base):
@@ -195,10 +202,6 @@ class Episode(Base):
     created_at = Column(DateTime(timezone=True), default=now)
 
 
-import threading  # noqa: E402
-
-WRITE_LOCK = threading.Lock()   # one writer at a time in this process (audit chain, dedupe checks)
-
 _engine = None
 _Session = None
 
@@ -208,10 +211,32 @@ def init(url: str | None = None):
     url = url or config.DATABASE_URL
     if url.startswith("sqlite:///"):
         config.DATA_DIR.mkdir(parents=True, exist_ok=True)
-    _engine = create_engine(url, future=True)
+    if url.startswith("sqlite"):
+        _engine = create_engine(url, future=True, connect_args={"timeout": 30})
+
+        @event.listens_for(_engine, "connect")
+        def _pragmas(dbapi_conn, _rec):
+            dbapi_conn.execute("PRAGMA foreign_keys=ON")
+    else:
+        _engine = create_engine(url, future=True)
     Base.metadata.create_all(_engine)
+    with _engine.begin() as conn:   # also enforce on audit tables created before these constraints
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_audit_prev ON audit (prev_hash)"))
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_audit_hash ON audit (hash)"))
+        if not conn.execute(text("SELECT 1 FROM audit_lock WHERE id = 1")).first():
+            conn.execute(text("INSERT INTO audit_lock (id, n) VALUES (1, 0)"))
     _Session = sessionmaker(bind=_engine, expire_on_commit=False, future=True)
     return _engine
+
+
+def serialize_writes(s):
+    """Take a transaction-scoped write lock before reading the audit head.
+
+    Updating the single audit_lock row takes SQLite's database write lock / a PostgreSQL row
+    lock, held until this transaction commits or rolls back. Any other writer — another
+    thread, the CLI, a second server process — waits here, so each event chains from the
+    head committed immediately before it. Works on an empty audit table too."""
+    s.execute(text("UPDATE audit_lock SET n = n + 1 WHERE id = 1"))
 
 
 def session():

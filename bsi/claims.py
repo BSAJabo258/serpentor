@@ -115,7 +115,8 @@ def add_identity_term(person_id: int, term: str, kind: str, *, source_id=None,
 
 # ---------------------------------------------------------------- entity resolution
 def _norm(name: str) -> str:
-    return re.sub(r"[^a-z ]", "", name.lower()).strip()
+    """Case-fold and drop punctuation, keeping letters in every script (é, ş, ñ, Arabic, Ge'ez…)."""
+    return " ".join(re.sub(r"[^\w\s]|_|\d", "", name.casefold()).split())
 
 
 def match_person(name: str, birth_year: int | None = None, death_year: int | None = None,
@@ -152,8 +153,10 @@ def match_against(cands: list[dict], name: str, birth_year=None, death_year=None
             conflict.append(f"birth {birth_year} vs {p['born']}")
         if death_year and p["died"] and abs(death_year - p["died"]) > 2:
             conflict.append(f"death {death_year} vs {p['died']}")
+        agreed = bool((birth_year and p["born"] and abs(birth_year - p["born"]) <= 2) or
+                      (death_year and p["died"] and abs(death_year - p["died"]) <= 2))
         verdict = ("distinct" if conflict else
-                   "same" if score >= threshold and (birth_year or death_year) else
+                   "same" if score >= threshold and agreed else
                    "possible" if score >= threshold else "unlikely")
         out.append({"person_id": p["id"], "name": p["name"], "score": round(score, 3),
                     "verdict": verdict, "conflicts": conflict})

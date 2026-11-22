@@ -85,7 +85,10 @@ def review(claim_id, reviewer, note):
 def load_seed(path=SEED) -> int:
     data = json.loads(Path(path).read_text())
     s = db.session()
-    existing = {p.display_name: (p.id, {c.statement for c in p.claims}) for p in s.query(db.Person)}
+    names = [t["name"] for t in data["targets"]]
+    existing = {}
+    for p in s.query(db.Person).filter(db.Person.display_name.in_(names)).order_by(db.Person.id):
+        existing.setdefault(p.display_name, (p.id, {c.statement for c in p.claims}))   # earliest record wins
     s.close()
     n = 0
     for t in data["targets"]:

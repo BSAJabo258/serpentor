@@ -165,8 +165,10 @@ docker compose --profile setup run --rm ollama-pull
 docker compose up -d
 curl -X POST localhost:8080/seed
 ```
-Every port is bound to `127.0.0.1`. The API and Ollama sit on an internal-only
-network; only SearXNG has an outbound route.
+Every port is bound to `127.0.0.1`. Ollama sits on an internal-only network with no
+outbound route. SearXNG and the API can reach the internet (the API needs it for the
+archive connectors), and sources marked sensitive are blocked from leaving local hosts in code.
+Settings in `.env` are loaded automatically when the app starts.
 
 **Scanned documents:** `ocrmypdf --output-type pdfa scan.pdf scan.ocr.pdf`, then ingest
 both — the scan as the original, the OCR copy as a derived source.

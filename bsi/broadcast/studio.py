@@ -15,17 +15,14 @@ def episodes_dir() -> Path:
 
 def make_episode(claim_id: int | None = None, kind: str | None = None, *, captain_note: str | None = None,
                  make_short: bool = True) -> dict:
-    with db.WRITE_LOCK:
-        plan = _plan(claim_id, kind)
+    plan = _plan(claim_id, kind)
     if plan.get("status") == "nothing_to_make":
         return plan
-    with db.WRITE_LOCK:     # compiling the research spec records questions + an audit event
-        script = episode.build_script(plan["claim_id"], plan["kind"], plan.get("previous_status"), captain_note)
-        ep_id = _create(script)
+    script = episode.build_script(plan["claim_id"], plan["kind"], plan.get("previous_status"), captain_note)
+    ep_id = _create(script)
     ep_dir = episodes_dir() / f"ep{ep_id:04d}"
     out = render.render_episode(script, ep_dir, make_short=make_short)
-    with db.WRITE_LOCK:
-        _finish(ep_id, ep_dir, script, out)
+    _finish(ep_id, ep_dir, script, out)
     return {"episode_id": ep_id, "title": script["title"], "kind": script["kind"], "status": script["status"],
             "duration": out["duration"], "voice": out["voice"], "dir": str(ep_dir)}
 
@@ -79,13 +76,11 @@ def _finish(ep_id, ep_dir, script, out):
 
 
 def approve(ep_id: int, reviewer: str, note: str = "") -> None:
-    with db.WRITE_LOCK:
-        _set_state(ep_id, "approved", reviewer, note, require="draft")
+    _set_state(ep_id, "approved", reviewer, note, require="draft")
 
 
 def reject(ep_id: int, reviewer: str, note: str = "") -> None:
-    with db.WRITE_LOCK:
-        _set_state(ep_id, "rejected", reviewer, note)
+    _set_state(ep_id, "rejected", reviewer, note)
 
 
 def _set_state(ep_id, state, reviewer, note, require=None):
@@ -116,8 +111,7 @@ def publish(ep_id: int, platform: str = "youtube", **kw) -> dict:
         s.close()
     from . import publish as pub
     res = pub.PUBLISHERS[platform](files, script, ep_title, **kw)
-    with db.WRITE_LOCK:
-        _record_publish(ep_id, platform, res)
+    _record_publish(ep_id, platform, res)
     return res
 
 

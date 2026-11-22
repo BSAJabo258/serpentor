@@ -143,6 +143,8 @@ def test_question_engine_expands_findings():
 
 def test_audit_chain_detects_tampering():
     s = db.session()
+    vault.audit(s, "test.setup", {"for": "tamper test"})
+    s.commit()
     assert vault.verify_audit(s)["ok"]
     ev = s.query(db.AuditEvent).order_by(db.AuditEvent.id).first()
     original = dict(ev.payload)
@@ -156,8 +158,9 @@ def test_audit_chain_detects_tampering():
     s.close()
 
 
-def test_backup_restores(tmp_path):
+def test_backup_restores(tmp_path, make_pdf):
     import sqlite3
+    vault.register(make_pdf("backup.pdf", ["backup fixture"]), tier="unverified")
     dest = vault.backup(tmp_path / "backup.db")
     with sqlite3.connect(dest) as b:
         n = b.execute("select count(*) from sources").fetchone()[0]

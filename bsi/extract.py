@@ -14,7 +14,7 @@ def extract_pages(path: Path) -> tuple[list[str], str]:
         reader = PdfReader(str(path))
         return [(p.extract_text() or "") for p in reader.pages], "application/pdf"
     if suffix in {".txt", ".md", ".csv", ".json", ".html", ".htm", ".xml"}:
-        text = path.read_text(errors="replace")
+        text = path.read_text(encoding="utf-8", errors="replace")
         # form feed = page break convention for plain-text transcriptions
         return text.split("\f"), "text/plain"
     return [""], "application/octet-stream"   # images/audio: stored, text added later via OCR

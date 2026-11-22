@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ..text import sentences  # noqa: F401  (shared, abbreviation-aware)
 from . import visuals, voice
 from .episode import STATUS_LABEL
 
@@ -31,18 +32,6 @@ ANIM_END = {"title": 2.2, "claim": 4.0, "evidence": 2.0, "scale": 2.3, "question
             "note": 1.0, "sources": 3.5, "timeline": 999}
 
 
-ABBREV = re.compile(r"(?:\b[A-Z]|\b(?:Mr|Mrs|Dr|St|Sr|Jr|Gen|Col|Maj|Capt|Rev|No|vs|c))\.$")
-
-
-def sentences(text):
-    """Split on sentence ends, but not after initials or common abbreviations ("Martha E. Tyson")."""
-    out = []
-    for part in re.split(r"(?<=[.!?])\s+", text.strip()):
-        if out and ABBREV.search(out[-1]):
-            out[-1] += " " + part
-        elif part:
-            out.append(part)
-    return out
 
 
 def fmt_ts(t, srt=True):

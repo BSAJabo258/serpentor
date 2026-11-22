@@ -126,6 +126,9 @@ def get(name, client=None) -> Connector:
 def run_all(query: str, *, names: list[str] | None = None, limit: int = 10,
             client: httpx.Client | None = None, save: bool = True) -> dict:
     names = names or list(REGISTRY)
+    unknown = [n for n in names if n not in REGISTRY]
+    if unknown:
+        raise ValueError(f"unknown connector(s): {', '.join(unknown)}")
     runs = []
     for n in names:
         c = get(n, client=client)

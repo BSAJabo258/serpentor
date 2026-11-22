@@ -20,22 +20,9 @@ async def lifespan(_app):
 
 app = FastAPI(title="BAUBSA Sovereign Intelligence", version="0.2.0", lifespan=lifespan)
 
-import anyio  # noqa: E402
-
-
-@app.middleware("http")
-async def serialize_writes(request, call_next):
-    """One write at a time: the audit chain reads its head and appends in one step, and
-    duplicate checks (e.g. Wikidata QIDs) can't race. The unique constraints on the audit
-    table are the database-level backstop if several processes ever share one database."""
-    # /broadcast routes lock around their own short DB writes so a long render never blocks the app
-    if request.method in ("POST", "PUT", "PATCH", "DELETE") and not request.url.path.startswith("/broadcast"):
-        await anyio.to_thread.run_sync(db.WRITE_LOCK.acquire)
-        try:
-            return await call_next(request)
-        finally:
-            db.WRITE_LOCK.release()
-    return await call_next(request)
+# Write safety lives in the database, not in the HTTP layer: every audit append takes a
+# transaction-scoped lock before reading the chain head (db.serialize_writes), so slow
+# requests (model calls, large downloads) never block other writes.
 STATIC = Path(__file__).parent / "static"
 
 
@@ -107,11 +94,10 @@ def list_persons(field: str | None = None, q: str | None = None, has_claims: boo
             qry = qry.filter(db.Person.display_name.ilike(f"%{q}%"))
         if has_claims:
             qry = qry.filter(db.Person.claims.any())
-        total = qry.count()
+        people = [p for p in qry if not field or field in (p.fields or [])]
+        total = len(people)
         out = []
-        for p in qry.offset(offset).limit(limit):
-            if field and field not in (p.fields or []):
-                continue
+        for p in people[offset:offset + limit]:
             out.append({"id": p.id, "name": p.display_name, "born": p.birth_year, "died": p.death_year,
                         "fields": p.fields, "tags": p.tags or [], "external_ids": p.external_ids or {},
                         "claims": [claims.compute_status(c) | {"statement": c.statement, "type": c.claim_type}
@@ -178,7 +164,10 @@ def list_connectors():
 @app.get("/archives/search")
 def archives_search(q: str, connectors_: str | None = Query(None, alias="connectors"), limit: int = 10):
     names = [n for n in (connectors_ or "").split(",") if n] or None
-    return connectors.run_all(q, names=names, limit=limit)
+    try:
+        return connectors.run_all(q, names=names, limit=limit)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 class ImportIn(BaseModel):

@@ -35,7 +35,7 @@ services:
     profiles: [setup]
     volumes: [ollama:/root/.ollama]
     networks: [egress]
-    entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 5 && ollama pull ${BSI_OLLAMA_MODEL:-qwen2.5:7b-instruct}"]
+    entrypoint: ["/bin/sh", "-c", "ollama serve & for i in $$(seq 1 60); do ollama list >/dev/null 2>&1 && exec ollama pull ${BSI_OLLAMA_MODEL:-qwen2.5:7b-instruct}; sleep 1; done; echo 'ollama did not start within 60s' >&2; exit 1"]
 
   api:
     build: .
