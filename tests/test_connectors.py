@@ -1,3 +1,4 @@
+import os
 """Connectors, loader, fetch and API — all with mocked HTTP so tests never hit the network."""
 import json
 from pathlib import Path
@@ -424,3 +425,44 @@ def test_sentences_paragraph_breaks_and_lowercase_names():
         ["The witness denied that Dr. van der Meer killed Jones [P1]."]
     assert sentences("Mr. Smith came. He left.") == ["Mr. Smith came.", "He left."]
     assert sentences("He died ca. 1840 [P1].") == ["He died ca. 1840 [P1]."]
+
+
+PG_URL = os.environ.get("BSI_TEST_PG_URL")
+
+
+@pytest.mark.skipif(not PG_URL, reason="set BSI_TEST_PG_URL to a throwaway PostgreSQL database")
+def test_audit_chain_serializes_on_postgres():
+    """Empty audit table on PostgreSQL, 4 processes appending at once: one unbroken chain.
+    Then the unique indexes are dropped and init() must recreate them on the existing table."""
+    import subprocess
+    import sys
+    from sqlalchemy import create_engine, inspect, text
+    from sqlalchemy.orm import Session
+    root = str(Path(__file__).parents[1])
+    eng = create_engine(PG_URL)
+    with eng.begin() as c:
+        c.execute(text("DROP SCHEMA public CASCADE; CREATE SCHEMA public"))
+    subprocess.run([sys.executable, "-c", f"from bsi import db; db.init({PG_URL!r})"], check=True, cwd=root)
+    code = (f"import sys; sys.path.insert(0, {root!r})\n"
+            "from bsi import db, vault\n"
+            f"db.init({PG_URL!r})\n"
+            "for i in range(50):\n"
+            "    s = db.session(); vault.audit(s, 'race', {'i': i}); s.commit(); s.close()\n")
+    procs = [subprocess.Popen([sys.executable, "-c", code], cwd=root) for _ in range(4)]
+    assert all(p.wait(timeout=300) == 0 for p in procs)
+    from bsi import vault
+    with Session(eng) as s:
+        res = vault.verify_audit(s)
+    assert res["ok"] and res["checked"] == 200
+    # existing table without the unique indexes -> init() adds them
+    with eng.begin() as c:
+        for uc in inspect(c).get_unique_constraints("audit"):
+            c.execute(text(f'ALTER TABLE audit DROP CONSTRAINT "{uc["name"]}"'))
+        for ix in inspect(c).get_indexes("audit"):
+            if ix["unique"]:
+                c.execute(text(f'DROP INDEX "{ix["name"]}"'))
+    assert not [ix for ix in inspect(eng).get_indexes("audit") if ix["unique"]]
+    subprocess.run([sys.executable, "-c", f"from bsi import db; db.init({PG_URL!r})"], check=True, cwd=root)
+    uniq = {tuple(ix["column_names"]) for ix in inspect(eng).get_indexes("audit") if ix["unique"]}
+    assert ("prev_hash",) in uniq and ("hash",) in uniq
+    eng.dispose()
